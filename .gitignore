@@ -1,0 +1,7 @@
+.env
+conversation_history.json
+training_log.json
+training_*.csv
+system_prompt_with_data.txt
+__pycache__/
+*.pyc
