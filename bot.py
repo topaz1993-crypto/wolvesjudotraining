@@ -360,17 +360,43 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_camp":
         await query.answer()
-        await camp_command(update, context)
+        stats = camp.get_stats()
+        await query.message.reply_text(
+            f"🏕 *מחנה קיץ — {stats['total']} ילדים רשומים*",
+            parse_mode="Markdown", reply_markup=camp_menu_keyboard(),
+        )
         return
 
     if action == "menu_lyla":
         await query.answer()
-        await lyla_command(update, context)
+        stats = lyla.get_stats()
+        await query.message.reply_text(
+            f"🌸 *לילה יפני — {stats['total']} משתתפים*",
+            parse_mode="Markdown", reply_markup=lyla_menu_keyboard(),
+        )
         return
 
     if action == "menu_stats":
         await query.answer()
-        await stats_command(update, context)
+        await query.message.reply_text("📊 טוען נתונים...")
+        # reuse stats logic inline
+        lines = ["📊 *סטטיסטיקת וולבס ג׳ודו*\n"]
+        try:
+            c = camp.get_stats()
+            lines.append(f"🏕 מחנה קיץ: *{c['total']}* ילדים")
+            for b, n in c.get('by_branch', {}).items():
+                lines.append(f"  • {b}: {n}")
+        except Exception:
+            pass
+        try:
+            ly = lyla.get_stats()
+            lines.append(f"\n🌙 לילה יפני: *{ly['total']}* משתתפים")
+            for b, n in ly.get('by_branch', {}).items():
+                lines.append(f"  • {b}: {n}")
+        except Exception:
+            pass
+        await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט ראשי", callback_data="menu_back")]]))
         return
 
     if action == "menu_help":
@@ -1157,7 +1183,14 @@ def _build_data_context(text: str) -> str:
 
 async def _calendar_query(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str):
     """Fetch calendar events for query_text and reply with Claude analysis."""
-    await update.message.chat.send_action("typing")
+    # Support both message and callback contexts
+    if update.callback_query:
+        chat = update.callback_query.message.chat
+        reply_fn = update.callback_query.message.reply_text
+    else:
+        chat = update.message.chat
+        reply_fn = update.message.reply_text
+    await chat.send_action("typing")
     try:
         date_from, date_to = cal.parse_date_range_hebrew(query_text)
         events = cal.get_events_range(date_from, date_to)
@@ -1184,7 +1217,7 @@ async def _calendar_query(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
         reply = f"❌ שגיאה בשליפת היומן: {e}"
     chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
     for chunk in chunks:
-        await update.message.reply_text(chunk)
+        await reply_fn(chunk)
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
