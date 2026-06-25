@@ -179,24 +179,28 @@ async def deliver_csv(context, chat_id: str, reply_text: str, csv_content: str):
 def main_menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📅 יומן היום",    callback_data="menu_today"),
-            InlineKeyboardButton("📆 יומן השבוע",   callback_data="menu_week"),
+            InlineKeyboardButton("📅 יומן היום",     callback_data="menu_today"),
+            InlineKeyboardButton("🌄 יומן מחר",      callback_data="menu_tomorrow"),
         ],
         [
-            InlineKeyboardButton("📋 יומן החודש",   callback_data="menu_month"),
-            InlineKeyboardButton("➕ הוסף ליומן",   callback_data="menu_cal_add"),
+            InlineKeyboardButton("📆 יומן השבוע",    callback_data="menu_week"),
+            InlineKeyboardButton("📋 יומן החודש",    callback_data="menu_month"),
         ],
         [
-            InlineKeyboardButton("🥋 תוכנית אימון", callback_data="menu_plan"),
-            InlineKeyboardButton("✅ נוכחות",        callback_data="menu_attendance"),
+            InlineKeyboardButton("➕ הוסף ליומן",    callback_data="menu_cal_add"),
+            InlineKeyboardButton("✅ נוכחות",         callback_data="menu_attendance"),
         ],
         [
-            InlineKeyboardButton("🏕️ מחנה קיץ",    callback_data="menu_camp"),
-            InlineKeyboardButton("🌙 לילה יפני",    callback_data="menu_lyla"),
+            InlineKeyboardButton("🥋 תוכנית אימון",  callback_data="menu_plan"),
+            InlineKeyboardButton("🎨 עיצוב גיליון",  callback_data="menu_design"),
         ],
         [
-            InlineKeyboardButton("📊 סטטיסטיקות",   callback_data="menu_stats"),
-            InlineKeyboardButton("❓ עזרה",          callback_data="menu_help"),
+            InlineKeyboardButton("🏕️ מחנה קיץ",     callback_data="menu_camp"),
+            InlineKeyboardButton("🌙 לילה יפני",     callback_data="menu_lyla"),
+        ],
+        [
+            InlineKeyboardButton("🥇 חגורות",        callback_data="menu_belts"),
+            InlineKeyboardButton("📊 סטטיסטיקות",    callback_data="menu_stats"),
         ],
     ])
 
@@ -204,14 +208,25 @@ def main_menu_markup() -> InlineKeyboardMarkup:
 def attendance_menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔵 סירקין",    callback_data="menu_att_סירקין"),
-            InlineKeyboardButton("🟢 חגור",      callback_data="menu_att_חגור"),
+            InlineKeyboardButton("🔵 סירקין",     callback_data="menu_att_סירקין"),
+            InlineKeyboardButton("🟢 חגור",       callback_data="menu_att_חגור"),
         ],
         [
-            InlineKeyboardButton("🟡 נווה ירק",  callback_data="menu_att_נווה ירק"),
-            InlineKeyboardButton("🟣 אהרונוביץ", callback_data="menu_att_אהרונוביץ"),
+            InlineKeyboardButton("🟡 נווה ירק",   callback_data="menu_att_נווה ירק"),
+            InlineKeyboardButton("🟣 אהרונוביץ",  callback_data="menu_att_אהרונוביץ"),
         ],
-        [InlineKeyboardButton("🔙 חזרה",         callback_data="menu_back")],
+        [InlineKeyboardButton("🔙 חזרה",          callback_data="menu_back")],
+    ])
+
+
+def belts_menu_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📝 הודעה להורה אחרי מבחן", callback_data="menu_belt_msg")],
+        [
+            InlineKeyboardButton("💳 לינק תשלום",   callback_data="menu_belt_pay"),
+            InlineKeyboardButton("🌐 פורטל הכנה",   callback_data="menu_belt_portal"),
+        ],
+        [InlineKeyboardButton("🔙 חזרה",             callback_data="menu_back")],
     ])
 
 
@@ -319,6 +334,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _calendar_query(update, context, "היום")
         return
 
+    if action == "menu_tomorrow":
+        await query.answer()
+        await _calendar_query(update, context, "מחר")
+        return
+
     if action == "menu_week":
         await query.answer()
         await _calendar_query(update, context, "השבוע")
@@ -334,6 +354,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "📝 שלח לי מה להוסיף ליומן\nלדוגמה: *מחר ב-10:00 פגישה עם אבא של בועז*",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]),
         )
         return
 
@@ -341,8 +362,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.edit_message_text(
             "🥋 שלח לי בקשה לתוכנית אימון\nלדוגמה: *סירקין יום ב׳, ד-ו וז-בוגרים*",
+            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]),
         )
+        return
+
+    if action == "menu_design":
+        await query.answer()
+        await query.edit_message_text(
+            "🎨 עיצוב גיליון נוכחות — שלח:\n`/design סירקין ד-ו`\nאו בחר סניף:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔵 סירקין",    callback_data="menu_design_סירקין"),
+                 InlineKeyboardButton("🟢 חגור",      callback_data="menu_design_חגור")],
+                [InlineKeyboardButton("🟡 נווה ירק",  callback_data="menu_design_נווה ירק"),
+                 InlineKeyboardButton("🟣 אהרונוביץ", callback_data="menu_design_אהרונוביץ")],
+                [InlineKeyboardButton("🔙 חזרה",      callback_data="menu_back")],
+            ]))
         return
 
     if action == "menu_attendance":
@@ -353,9 +389,49 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action.startswith("menu_att_"):
         branch = action.replace("menu_att_", "")
         await query.answer()
-        await query.edit_message_text(f"✅ נוכחות {branch} — שלח: *נוכחות {branch}*", parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_attendance")]]))
+        await query.message.reply_text(f"✅ מתחיל נוכחות {branch}...")
+        # trigger attendance flow directly
+        class FakeUpdate:
+            def __init__(self, msg): self.message = msg
+        fake = FakeUpdate(query.message)
+        fake.message._text = f"נוכחות {branch}"
         context.user_data["pending_branch"] = branch
+        await start_attendance_session(query.message._bot, str(query.message.chat_id), user_id, branch, "")
+        return
+
+    if action == "menu_belts":
+        await query.answer()
+        await query.edit_message_text("🥇 חגורות — בחר פעולה:", reply_markup=belts_menu_markup())
+        return
+
+    if action == "menu_belt_msg":
+        await query.answer()
+        msg = (
+            "📝 *הודעה להורה אחרי מבחן חגורה:*\n\n"
+            "היי, אני שמח לעדכן שהילד/ה עשה/ה מבחן לחגורה *\\[צבע\\]* ועבר/ה בהצלחה\\! 🥳\n"
+            "ביום *\\[יום\\]* נקיים טקס מעבר חגורה כ\\-10 דקות לקראת סוף האימון\\.\n"
+            "אתם מוזמנים להגיע, לצלם ולהביא כיבוד בריא \\- *לא חובה*\n"
+            "עלות חגורה ותעודה \\- 60 ₪\n"
+            "https://private\\.invoice4u\\.co\\.il/Clearing/Invoice4UClearing\\.aspx?ProductId=4476&mobileApp=true"
+        )
+        await query.edit_message_text(msg, parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
+        return
+
+    if action == "menu_belt_pay":
+        await query.answer()
+        await query.edit_message_text(
+            "💳 לינק תשלום חגורה \\(60 ₪\\):\nhttps://private\\.invoice4u\\.co\\.il/Clearing/Invoice4UClearing\\.aspx?ProductId=4476&mobileApp=true",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
+        return
+
+    if action == "menu_belt_portal":
+        await query.answer()
+        await query.edit_message_text(
+            "🌐 פורטל הכנה למבחני חגורה:\nhttps://wolvesjudotest\\.netlify\\.app/",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
         return
 
     if action == "menu_camp":
