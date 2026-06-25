@@ -238,17 +238,19 @@ def belts_menu_markup() -> InlineKeyboardMarkup:
     ])
 
 
-SHEETS_BASE = "https://docs.google.com/spreadsheets/d"
+def _sheet_url(sheet_id: str) -> str:
+    # Deep link opens Google Sheets app directly instead of browser
+    return f"googledrive://open?id={sheet_id}"
 
 SHEET_LINKS = {
-    "נוכחות סירקין":      f"{SHEETS_BASE}/1L0mcnpBPW4_3nsxaMy3EunQuOHPjWejvL1Wb6SGzltQ/edit",
-    "נוכחות חגור":        f"{SHEETS_BASE}/18p087VLNCRqPOhGbDzUeEg4YIHatiCfSc7v8NVFEPHA/edit",
-    "נוכחות נווה ירק":    f"{SHEETS_BASE}/1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU/edit",
-    "נוכחות אהרונוביץ":   f"{SHEETS_BASE}/1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E/edit",
-    "נוכחות פונקציונלי":  f"{SHEETS_BASE}/1LYqia2ESkLY0HD8QA0vkg1xxqLI5qx0nY9CVVj5MGGY/edit",
-    "תוכניות אימון":      f"{SHEETS_BASE}/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit",
-    "מחנה קיץ":           f"{SHEETS_BASE}/1hC9CZbXaFCUGvNHE96YVjv0HbEf4C5S_D4JOJFe1B4c/edit",
-    "לילה יפני":          f"{SHEETS_BASE}/1UMGrSnPcWp9lHX6DaaSt07ICNDUGEhk4O5v7L0hEsas/edit",
+    "נוכחות סירקין":     _sheet_url("1L0mcnpBPW4_3nsxaMy3EunQuOHPjWejvL1Wb6SGzltQ"),
+    "נוכחות חגור":       _sheet_url("18p087VLNCRqPOhGbDzUeEg4YIHatiCfSc7v8NVFEPHA"),
+    "נוכחות נווה ירק":   _sheet_url("1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU"),
+    "נוכחות אהרונוביץ":  _sheet_url("1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E"),
+    "נוכחות פונקציונלי": _sheet_url("1LYqia2ESkLY0HD8QA0vkg1xxqLI5qx0nY9CVVj5MGGY"),
+    "תוכניות אימון":     _sheet_url("1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I"),
+    "מחנה קיץ":          _sheet_url("1hC9CZbXaFCUGvNHE96YVjv0HbEf4C5S_D4JOJFe1B4c"),
+    "לילה יפני":         _sheet_url("1UMGrSnPcWp9lHX6DaaSt07ICNDUGEhk4O5v7L0hEsas"),
 }
 
 
