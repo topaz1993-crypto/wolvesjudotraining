@@ -23,6 +23,7 @@ import absence_tracker as abt
 import calendar_tasks as cal
 import camp_sheet as camp
 import lyla_sheet as lyla
+import training_plans as tp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ def plan_buttons() -> InlineKeyboardMarkup:
 
 def approved_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 שמור בגיליון תוכניות", callback_data="save_to_sheet")],
         [InlineKeyboardButton("📋 תוכנית חדשה", callback_data="new_plan")],
     ])
 
@@ -587,6 +589,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             csv_start = reply.index("```csv") + 6
             csv_end = reply.index("```", csv_start)
             csv_content = reply[csv_start:csv_end].strip()
+            # Save CSV in pending_plans for later sheet upload
+            if user_id not in pending_plans:
+                pending_plans[user_id] = {}
+            pending_plans[user_id]["csv"] = csv_content
+            # Try to extract branch/group from history
+            hist = get_history(user_id)
+            for msg in reversed(hist):
+                content = msg.get("content", "")
+                for branch in ["סירקין", "חגור", "נווה ירק", "אהרונוביץ", "פונקציונלי", "נבחרת"]:
+                    if branch in content:
+                        pending_plans[user_id]["branch"] = branch
+                        break
+                if "branch" in pending_plans[user_id]:
+                    break
+            save_json(PENDING_FILE, pending_plans)
             await deliver_csv(context, query.message.chat_id, reply, csv_content)
         else:
             await context.bot.send_message(chat_id=query.message.chat_id, text=reply, reply_markup=approved_buttons())
@@ -621,6 +638,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=query.message.chat_id,
             text="👍 מעולה! שלח לי את הבקשה הבאה (סניף + יום + קבוצות).",
         )
+
+    elif action == "save_to_sheet":
+        await query.answer()
+        # Ask which branch/group/date to save
+        plan = pending_plans.get(user_id, {})
+        branch = plan.get("branch", "")
+        group = plan.get("group", "")
+        if not branch or not group:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="📝 שלח לי: *סניף | קבוצה | תאריך* (לדוגמה: `סירקין | ז-בוגרים | 26/6`)",
+                parse_mode="Markdown",
+            )
+            sheets_sessions[user_id] = {"step": "save_plan_meta", "csv": plan.get("csv", "")}
+        else:
+            sheets_sessions[user_id] = {
+                "step": "save_plan_date", "branch": branch, "group": group,
+                "csv": plan.get("csv", "")
+            }
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"📅 לאיזה תאריך לשמור את התוכנית ל-*{branch} {group}*?\n(לדוגמה: `26/6` או `היום`)",
+                parse_mode="Markdown",
+            )
 
 
 def attendance_student_keyboard(session: dict) -> InlineKeyboardMarkup:
@@ -1532,6 +1573,55 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Save plan to sheet flow ──
+    if step == 'save_plan_date':
+        from datetime import date as date_cls
+        import re as _re
+        d_match = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        if "היום" in text:
+            plan_date = date_cls.today()
+        elif d_match:
+            plan_date = date_cls(date_cls.today().year, int(d_match.group(2)), int(d_match.group(1)))
+        else:
+            await update.message.reply_text("❌ לא הבנתי תאריך. נסה: `26/6`", parse_mode="Markdown")
+            return True
+        branch = ss["branch"]
+        group = ss["group"]
+        csv_text = ss.get("csv", "")
+        # Extract plan items from CSV
+        lines = [l for l in csv_text.splitlines() if l.strip() and not l.startswith("שעה")]
+        items = []
+        for line in lines:
+            parts = line.split(",")
+            if len(parts) >= 3:
+                items.append(parts[2].strip())
+        if not items:
+            await update.message.reply_text("❌ לא מצאתי תוכן לשמירה")
+            sheets_sessions.pop(user_id, None)
+            return True
+        try:
+            result = tp.save_plan_to_sheet(branch, group, plan_date, items)
+            await update.message.reply_text(result)
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה בשמירה: {e}")
+        sheets_sessions.pop(user_id, None)
+        return True
+
+    if step == 'save_plan_meta':
+        parts = [p.strip() for p in text.replace("|", ",").split(",")]
+        if len(parts) >= 3:
+            ss["branch"] = parts[0]
+            ss["group"] = parts[1]
+            ss["step"] = "save_plan_date"
+            date_str = parts[2]
+            ss["date_text"] = date_str
+            await update.message.reply_text(f"📅 שומר ל-*{parts[0]}* {parts[1]}... תאריך: {date_str}", parse_mode="Markdown")
+            # Re-trigger with date
+            update.message._text = date_str
+            return await handle_sheets_text(update, context)
+        await update.message.reply_text("❌ פורמט: `סניף | קבוצה | תאריך`", parse_mode="Markdown")
+        return True
 
     # ── Camp add flow ──
     if step == 'camp_add_name':
