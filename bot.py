@@ -729,6 +729,11 @@ async def handle_new_student_text(update: Update, context: ContextTypes.DEFAULT_
 
 CAL_TRIGGERS = ("יומן", "תזכיר", "תזכורת", "משימה", "אירוע")
 CAL_DELETE_TRIGGERS = ("בטל משימה", "מחק משימה", "בטל אירוע", "מחק אירוע", "בטל תזכורת")
+CAL_QUERY_TRIGGERS = (
+    "מה יש לי", "מה עומד לי", "מה אני צריך", "מה יש היום", "מה יש מחר",
+    "מה יש השבוע", "מה יש החודש", "לוח זמנים", "סדר יום", "מה קורה",
+    "מה יש ב", "מה יש מ", "תראה לי את היומן", "היומן שלי",
+)
 
 
 async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -769,6 +774,30 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return True
 
         return False
+
+    # Calendar query — "מה יש לי היום/השבוע/..."
+    if any(t in text for t in CAL_QUERY_TRIGGERS):
+        await update.message.chat.send_action("typing")
+        try:
+            date_from, date_to = cal.parse_date_range_hebrew(text)
+            events = cal.get_events_range(date_from, date_to)
+            events_text = cal.format_events_for_claude(events, date_from, date_to)
+            prompt = (
+                f"[יומן Google — נתונים חיים]\n{events_text}\n\n"
+                f"שאלת המשתמש: {text}\n\n"
+                "נתח את האירועים האלה והצג סיכום שימושי ומסודר. "
+                "ציין את האימונים, המשימות, הפגישות. "
+                "אם יש משימות הקשורות לג'ודו — הדגש אותן. "
+                "תן המלצות אם רלוונטי."
+            )
+            reply = await call_claude(user_id, prompt)
+        except Exception as e:
+            log.error("Calendar query error: %s", e)
+            reply = f"❌ שגיאה בשליפת היומן: {e}"
+        chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
+        for chunk in chunks:
+            await update.message.reply_text(chunk)
+        return True
 
     # Delete request
     if any(t in text for t in CAL_DELETE_TRIGGERS):

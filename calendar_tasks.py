@@ -226,3 +226,170 @@ def calendar_list_display() -> str:
         emoji = CALENDAR_EMOJI.get(name, "📅")
         lines.append(f"{emoji} {name}")
     return "\n".join(lines)
+
+
+def parse_date_range_hebrew(text: str) -> tuple[date, date]:
+    """
+    Parse a Hebrew date-range expression.
+    Returns (date_from, date_to).
+    Examples: "היום", "מחר", "השבוע", "שבוע הבא", "החודש", "יוני", "מ-25/6 עד 1/7"
+    """
+    today = datetime.now().date()
+    t = text
+
+    # Explicit range: מ-X עד Y
+    range_match = re.search(r'מ[- ]?(\S+)\s+עד\s+(\S+)', t)
+    if range_match:
+        d1, _ = parse_date_hebrew(range_match.group(1))
+        d2, _ = parse_date_hebrew(range_match.group(2))
+        if d1 and d2:
+            return (d1, d2) if d1 <= d2 else (d2, d1)
+
+    # Month by name
+    month_map = {
+        "ינואר": 1, "פברואר": 2, "מרץ": 3, "אפריל": 4,
+        "מאי": 5, "יוני": 6, "יולי": 7, "אוגוסט": 8,
+        "ספטמבר": 9, "אוקטובר": 10, "נובמבר": 11, "דצמבר": 12,
+    }
+    for month_name, month_num in month_map.items():
+        if month_name in t:
+            year = today.year
+            # if the month already passed, assume next year
+            if month_num < today.month:
+                year += 1
+            first = date(year, month_num, 1)
+            if month_num == 12:
+                last = date(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                last = date(year, month_num + 1, 1) - timedelta(days=1)
+            return first, last
+
+    # Next week
+    if "שבוע הבא" in t:
+        days_to_sunday = (6 - today.weekday() + 1) % 7 or 7
+        next_sun = today + timedelta(days=days_to_sunday)
+        return next_sun, next_sun + timedelta(days=6)
+
+    # This week (Sunday–Saturday)
+    if "השבוע" in t or "שבוע" in t:
+        days_since_sunday = (today.weekday() + 1) % 7
+        week_start = today - timedelta(days=days_since_sunday)
+        return week_start, week_start + timedelta(days=6)
+
+    # Next month
+    if "חודש הבא" in t:
+        if today.month == 12:
+            first = date(today.year + 1, 1, 1)
+        else:
+            first = date(today.year, today.month + 1, 1)
+        if first.month == 12:
+            last = date(first.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            last = date(first.year, first.month + 1, 1) - timedelta(days=1)
+        return first, last
+
+    # This month
+    if "החודש" in t or "חודש" in t:
+        first = date(today.year, today.month, 1)
+        if today.month == 12:
+            last = date(today.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            last = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        return first, last
+
+    # Single day expressions
+    d, _ = parse_date_hebrew(t)
+    if d:
+        return d, d
+
+    # Default: today
+    return today, today
+
+
+def get_events_range(date_from: date, date_to: date) -> list:
+    """
+    Fetch all events from all calendars between date_from and date_to (inclusive).
+    Returns list of dicts sorted by datetime.
+    """
+    service = _get_service()
+    time_min = datetime.combine(date_from, datetime.min.time()).isoformat() + "Z"
+    time_max = datetime.combine(date_to + timedelta(days=1), datetime.min.time()).isoformat() + "Z"
+
+    all_events = []
+    for cal_name, cal_id in CALENDARS.items():
+        try:
+            result = service.events().list(
+                calendarId=cal_id,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=50,
+            ).execute()
+            for ev in result.get("items", []):
+                start = ev.get("start", {})
+                start_str = start.get("dateTime") or start.get("date", "")
+                # Parse to sortable
+                try:
+                    if "T" in start_str:
+                        dt = datetime.fromisoformat(start_str[:19])
+                        time_display = dt.strftime("%H:%M")
+                        date_display = dt.strftime("%d/%m")
+                        sort_key = dt
+                    else:
+                        d = datetime.strptime(start_str[:10], "%Y-%m-%d").date()
+                        time_display = ""
+                        date_display = d.strftime("%d/%m")
+                        sort_key = datetime.combine(d, datetime.min.time())
+                except Exception:
+                    time_display = ""
+                    date_display = start_str[:10]
+                    sort_key = datetime.min
+
+                all_events.append({
+                    "calendar": cal_name,
+                    "emoji": CALENDAR_EMOJI.get(cal_name, "📅"),
+                    "title": ev.get("summary", "(ללא כותרת)"),
+                    "date": date_display,
+                    "time": time_display,
+                    "sort_key": sort_key,
+                    "description": ev.get("description", ""),
+                })
+        except Exception:
+            continue
+
+    all_events.sort(key=lambda x: x["sort_key"])
+    return all_events
+
+
+def format_events_for_claude(events: list, date_from: date, date_to: date) -> str:
+    """Format events list as context string for Claude."""
+    if not events:
+        return "אין אירועים בטווח זה."
+
+    today = datetime.now().date()
+
+    def label(d: date) -> str:
+        if d == today:
+            return "היום"
+        if d == today + timedelta(days=1):
+            return "מחר"
+        days = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+        return f"יום {days[d.weekday()]} {d.strftime('%d/%m')}"
+
+    by_date: dict[str, list] = {}
+    for ev in events:
+        key = ev["date"]
+        by_date.setdefault(key, []).append(ev)
+
+    lines = [f"אירועים {date_from.strftime('%d/%m')}–{date_to.strftime('%d/%m')}:\n"]
+    for date_key, evs in by_date.items():
+        try:
+            d = datetime.strptime(date_key, "%d/%m").date().replace(year=date_from.year)
+        except Exception:
+            d = date_from
+        lines.append(f"📆 {label(d)}:")
+        for ev in evs:
+            time_part = f" {ev['time']}" if ev["time"] else ""
+            lines.append(f"  {ev['emoji']}{time_part} {ev['title']} [{ev['calendar']}]")
+    return "\n".join(lines)
