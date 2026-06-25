@@ -178,37 +178,51 @@ async def deliver_csv(context, chat_id: str, reply_text: str, csv_content: str):
     )
 
 
+def _hdr(text: str) -> list:
+    """Category header row — non-clickable separator button."""
+    return [InlineKeyboardButton(text, callback_data="noop")]
+
+
 def main_menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        # ── יומן ──
+        _hdr("─────  📅 יומן  ─────"),
         [
-            InlineKeyboardButton("📅 יומן היום",     callback_data="menu_today"),
-            InlineKeyboardButton("🌄 יומן מחר",      callback_data="menu_tomorrow"),
+            InlineKeyboardButton("היום",    callback_data="menu_today"),
+            InlineKeyboardButton("מחר",     callback_data="menu_tomorrow"),
+            InlineKeyboardButton("השבוע",   callback_data="menu_week"),
+            InlineKeyboardButton("החודש",   callback_data="menu_month"),
         ],
+        [InlineKeyboardButton("➕ הוסף אירוע ליומן", callback_data="menu_cal_add")],
+
+        # ── נוכחות ──
+        _hdr("─────  ✅ נוכחות  ─────"),
+        [InlineKeyboardButton("סמן נוכחות", callback_data="menu_attendance")],
+
+        # ── אימון ──
+        _hdr("─────  🥋 תוכנית אימון  ─────"),
+        [InlineKeyboardButton("🥋 בנה תוכנית אימון", callback_data="menu_plan")],
+
+        # ── גיליונות ──
+        _hdr("─────  📂 גיליונות  ─────"),
         [
-            InlineKeyboardButton("📆 יומן השבוע",    callback_data="menu_week"),
-            InlineKeyboardButton("📋 יומן החודש",    callback_data="menu_month"),
+            InlineKeyboardButton("📂 פתח גיליון",     callback_data="menu_open_sheet"),
+            InlineKeyboardButton("🎨 עיצוב גיליון",   callback_data="menu_design"),
         ],
+        [InlineKeyboardButton("🧹 נקה עמודות ריקות",  callback_data="menu_cleanup")],
+
+        # ── פרויקטים ──
+        _hdr("─────  🏕️ פרויקטים  ─────"),
         [
-            InlineKeyboardButton("➕ הוסף ליומן",    callback_data="menu_cal_add"),
-            InlineKeyboardButton("✅ נוכחות",         callback_data="menu_attendance"),
+            InlineKeyboardButton("🏕️ מחנה קיץ",  callback_data="menu_camp"),
+            InlineKeyboardButton("🌙 לילה יפני",  callback_data="menu_lyla"),
         ],
+
+        # ── נוסף ──
+        _hdr("─────  🥇 נוסף  ─────"),
         [
-            InlineKeyboardButton("🥋 תוכנית אימון",  callback_data="menu_plan"),
-            InlineKeyboardButton("🎨 עיצוב גיליון",  callback_data="menu_design"),
-        ],
-        [
-            InlineKeyboardButton("🏕️ מחנה קיץ",     callback_data="menu_camp"),
-            InlineKeyboardButton("🌙 לילה יפני",     callback_data="menu_lyla"),
-        ],
-        [
-            InlineKeyboardButton("🥇 חגורות",        callback_data="menu_belts"),
-            InlineKeyboardButton("📊 סטטיסטיקות",    callback_data="menu_stats"),
-        ],
-        [
-            InlineKeyboardButton("🧹 נקה עמודות ריקות", callback_data="menu_cleanup"),
-        ],
-        [
-            InlineKeyboardButton("📂 פתח גיליון",        callback_data="menu_open_sheet"),
+            InlineKeyboardButton("🥇 חגורות",      callback_data="menu_belts"),
+            InlineKeyboardButton("📊 סטטיסטיקות",  callback_data="menu_stats"),
         ],
     ])
 
@@ -311,8 +325,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_attendance(update, context):
         return
 
-    # Text triggers for camp/lyla menus
     user_text = update.message.text.strip()
+
+    # "תפריט" keyword → show main menu
+    if user_text in ("תפריט", "menu", "/menu"):
+        await show_main_menu(update)
+        return
+
+    # Text triggers for camp/lyla menus
     if any(t in user_text for t in ("מחנה קיץ", "מחנה", "camp")):
         await camp_command(update, context)
         return
@@ -372,6 +392,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
 
     # ─── Main menu callbacks ───
+    if action == "noop":
+        await query.answer()
+        return
+
     if action == "menu_back":
         await show_main_menu(update)
         await query.answer()
