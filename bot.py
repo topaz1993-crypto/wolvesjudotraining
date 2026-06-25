@@ -207,6 +207,9 @@ def main_menu_markup() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("🧹 נקה עמודות ריקות", callback_data="menu_cleanup"),
         ],
+        [
+            InlineKeyboardButton("📂 פתח גיליון",        callback_data="menu_open_sheet"),
+        ],
     ])
 
 
@@ -232,6 +235,44 @@ def belts_menu_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌐 פורטל הכנה",   callback_data="menu_belt_portal"),
         ],
         [InlineKeyboardButton("🔙 חזרה",             callback_data="menu_back")],
+    ])
+
+
+SHEETS_BASE = "https://docs.google.com/spreadsheets/d"
+
+SHEET_LINKS = {
+    "נוכחות סירקין":      f"{SHEETS_BASE}/1L0mcnpBPW4_3nsxaMy3EunQuOHPjWejvL1Wb6SGzltQ/edit",
+    "נוכחות חגור":        f"{SHEETS_BASE}/18p087VLNCRqPOhGbDzUeEg4YIHatiCfSc7v8NVFEPHA/edit",
+    "נוכחות נווה ירק":    f"{SHEETS_BASE}/1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU/edit",
+    "נוכחות אהרונוביץ":   f"{SHEETS_BASE}/1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E/edit",
+    "נוכחות פונקציונלי":  f"{SHEETS_BASE}/1LYqia2ESkLY0HD8QA0vkg1xxqLI5qx0nY9CVVj5MGGY/edit",
+    "תוכניות אימון":      f"{SHEETS_BASE}/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit",
+    "מחנה קיץ":           f"{SHEETS_BASE}/1hC9CZbXaFCUGvNHE96YVjv0HbEf4C5S_D4JOJFe1B4c/edit",
+    "לילה יפני":          f"{SHEETS_BASE}/1UMGrSnPcWp9lHX6DaaSt07ICNDUGEhk4O5v7L0hEsas/edit",
+}
+
+
+def sheets_links_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 נוכחות סירקין",    url=SHEET_LINKS["נוכחות סירקין"]),
+            InlineKeyboardButton("📋 נוכחות חגור",      url=SHEET_LINKS["נוכחות חגור"]),
+        ],
+        [
+            InlineKeyboardButton("📋 נווה ירק",         url=SHEET_LINKS["נוכחות נווה ירק"]),
+            InlineKeyboardButton("📋 אהרונוביץ",        url=SHEET_LINKS["נוכחות אהרונוביץ"]),
+        ],
+        [
+            InlineKeyboardButton("📋 פונקציונלי",       url=SHEET_LINKS["נוכחות פונקציונלי"]),
+        ],
+        [
+            InlineKeyboardButton("🗓 תוכניות אימון",    url=SHEET_LINKS["תוכניות אימון"]),
+        ],
+        [
+            InlineKeyboardButton("🏕 מחנה קיץ",         url=SHEET_LINKS["מחנה קיץ"]),
+            InlineKeyboardButton("🌸 לילה יפני",        url=SHEET_LINKS["לילה יפני"]),
+        ],
+        [InlineKeyboardButton("🔙 חזרה",                callback_data="menu_back")],
     ])
 
 
@@ -501,6 +542,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה: {e}",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
+        return
+
+    if action == "menu_open_sheet":
+        await query.answer()
+        await query.message.reply_text(
+            "📂 *בחר גיליון לפתיחה:*",
+            parse_mode="Markdown",
+            reply_markup=sheets_links_markup(),
+        )
         return
 
     if action == "menu_help":
