@@ -225,8 +225,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     break
             break
 
+    # Inject live data when relevant
+    data_context = _build_data_context(user_text)
+
     full_content = user_text
-    if extra_context:
+    if data_context:
+        full_content = f"[נתונים]\n{data_context}\n\n{user_text}"
+    elif extra_context:
         full_content = f"{user_text}\n\n[הקשר אוטומטי]\n{extra_context}"
 
     await update.message.chat.send_action("typing")
@@ -926,6 +931,145 @@ async def design_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# DATA CONTEXT — הזרקת נתונים חיים לקלוד
+# ─────────────────────────────────────────────
+
+def _build_data_context(text: str) -> str:
+    """Build live-data context string based on what the user is asking about."""
+    parts = []
+    t = text
+
+    absence_keywords = ("נעדר", "היעדרות", "לא הגיע", "חסר", "חסרים", "מי לא")
+    student_keywords = ("ספורטאים", "ילדים", "תלמידים", "כמה יש", "רשימה", "מי יש")
+    camp_keywords = ("מחנה",)
+    lyla_keywords = ("לילה יפני",)
+    attendance_stat_keywords = ("נוכחות", "אחוז", "סטטיסטיקה", "דוח")
+
+    if any(k in t for k in absence_keywords):
+        try:
+            log = load_json(Path("absence_log.json"), {})
+            streaks = []
+            for name, records in log.items():
+                recent = records[-5:]
+                consecutive = 0
+                for r in reversed(recent):
+                    if r.get("absent"):
+                        consecutive += 1
+                    else:
+                        break
+                total_absent = sum(1 for r in records if r.get("absent"))
+                total = len(records)
+                if consecutive >= 2 or total_absent >= 3:
+                    streaks.append((name, consecutive, total_absent, total))
+            streaks.sort(key=lambda x: (-x[1], -x[2]))
+            if streaks:
+                lines = ["ספורטאים עם היעדרויות בולטות:"]
+                for name, consec, absent, total in streaks[:15]:
+                    pct = int(absent / total * 100) if total else 0
+                    flag = f" ⚠️ {consec} ברצף" if consec >= 2 else ""
+                    lines.append(f"  {name}: {absent}/{total} ({pct}%){flag}")
+                parts.append("\n".join(lines))
+            else:
+                parts.append("אין ספורטאים עם היעדרויות חריגות.")
+        except Exception:
+            pass
+
+    if any(k in t for k in student_keywords):
+        try:
+            total_by_branch = {}
+            for branch, groups in att.BRANCH_GROUPS.items():
+                service = att._get_service()
+                count = 0
+                for group in groups:
+                    try:
+                        students = att.get_students(service, att.BRANCH_SHEETS[branch], group)
+                        count += len(students)
+                    except Exception:
+                        pass
+                total_by_branch[branch] = count
+            total = sum(total_by_branch.values())
+            lines = [f"סה\"כ ספורטאים פעילים: {total}"]
+            for b, n in sorted(total_by_branch.items(), key=lambda x: -x[1]):
+                lines.append(f"  {b}: {n}")
+            parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+    if any(k in t for k in camp_keywords):
+        try:
+            s = camp.get_stats()
+            lines = [f"מחנה קיץ: {s['total']} ילדים"]
+            for w, n in sorted(s['by_week'].items()):
+                lines.append(f"  {w}: {n}")
+            parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+    if any(k in t for k in lyla_keywords):
+        try:
+            s = lyla.get_stats()
+            lines = [f"לילה יפני: {s['total']} משתתפים"]
+            for b, n in sorted(s['by_branch'].items(), key=lambda x: -x[1]):
+                lines.append(f"  {b}: {n}")
+            parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+    return "\n\n".join(parts)
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/stats — סטטיסטיקה מהירה על המועדון."""
+    msg = await update.message.reply_text("📊 טוען נתונים...")
+    lines = ["📊 *סטטיסטיקת וולבס ג׳ודו*\n"]
+
+    # Absence alerts
+    try:
+        log = load_json(Path("absence_log.json"), {})
+        alerts = []
+        for name, records in log.items():
+            recent = records[-3:]
+            if len(recent) >= 3 and all(r.get("absent") for r in recent):
+                alerts.append(name)
+        if alerts:
+            lines.append(f"⚠️ *{len(alerts)} ספורטאים עם 3+ היעדרויות ברצף:*")
+            for n in alerts[:10]:
+                lines.append(f"  • {n}")
+            lines.append("")
+    except Exception:
+        pass
+
+    # Camp stats
+    try:
+        s = camp.get_stats()
+        lines.append(f"🏕 *מחנה קיץ:* {s['total']} ילדים")
+        for w, n in sorted(s['by_week'].items()):
+            lines.append(f"  {w}: {n}")
+        lines.append("")
+    except Exception:
+        pass
+
+    # Lyla stats
+    try:
+        s = lyla.get_stats()
+        lines.append(f"🌸 *לילה יפני:* {s['total']} משתתפים")
+        lines.append("")
+    except Exception:
+        pass
+
+    # Today's schedule
+    schedule = att.get_todays_schedule()
+    if schedule:
+        day_names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
+        day = day_names[__import__("datetime").datetime.now().weekday()]
+        lines.append(f"📅 *היום ({day}):*")
+        for branch, group, time in schedule:
+            lines.append(f"  {time} — {branch} {group}")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ─────────────────────────────────────────────
 # SHEETS — מחנה קיץ + לילה יפני
 # ─────────────────────────────────────────────
 
@@ -1328,6 +1472,7 @@ def main():
     app.add_handler(CommandHandler("design", design_command))
     app.add_handler(CommandHandler("camp", camp_command))
     app.add_handler(CommandHandler("lyla", lyla_command))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     log.info("Bot started...")
