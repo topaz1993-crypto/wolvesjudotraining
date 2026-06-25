@@ -5,3 +5,5 @@ training_*.csv
 system_prompt_with_data.txt
 __pycache__/
 *.pyc
+start.sh
+.env
