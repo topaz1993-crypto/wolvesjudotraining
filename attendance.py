@@ -394,6 +394,29 @@ def find_and_delete_empty_columns(service, spreadsheet_id: str, sheet_name: str,
     return len(empty_cols)
 
 
+def cleanup_all_empty_columns() -> dict:
+    """
+    Delete empty attendance columns from all branch sheets.
+    Returns {branch: {group: count_deleted}}.
+    """
+    service = _get_service()
+    results = {}
+    for branch, spreadsheet_id in BRANCH_SHEETS.items():
+        results[branch] = {}
+        for group in BRANCH_GROUPS.get(branch, []):
+            try:
+                sheet_id = _get_sheet_id(service, spreadsheet_id, group)
+                struct = _detect_structure(service, spreadsheet_id, group)
+                deleted = find_and_delete_empty_columns(
+                    service, spreadsheet_id, group, sheet_id,
+                    struct["student_start_0"], struct["first_att_col_0"]
+                )
+                results[branch][group] = deleted
+            except Exception:
+                results[branch][group] = -1
+    return results
+
+
 def prepare_attendance(branch: str, group: str) -> dict:
     """
     Load students and find/create today's column.

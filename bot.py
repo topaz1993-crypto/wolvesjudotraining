@@ -202,6 +202,9 @@ def main_menu_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🥇 חגורות",        callback_data="menu_belts"),
             InlineKeyboardButton("📊 סטטיסטיקות",    callback_data="menu_stats"),
         ],
+        [
+            InlineKeyboardButton("🧹 נקה עמודות ריקות", callback_data="menu_cleanup"),
+        ],
     ])
 
 
@@ -473,6 +476,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט ראשי", callback_data="menu_back")]]))
+        return
+
+    if action == "menu_cleanup":
+        await query.answer()
+        await query.edit_message_text("🧹 מנקה עמודות ריקות מכל הגיליונות...")
+        try:
+            results = att.cleanup_all_empty_columns()
+            lines = ["✅ *ניקוי הושלם*\n"]
+            total = sum(v for g in results.values() for v in g.values() if v > 0)
+            for branch, groups in results.items():
+                branch_total = sum(v for v in groups.values() if v > 0)
+                if branch_total > 0:
+                    lines.append(f"*{branch}*: {branch_total} עמודות")
+                    for group, count in groups.items():
+                        if count > 0:
+                            lines.append(f"  • {group}: {count}")
+            if total == 0:
+                lines.append("לא נמצאו עמודות ריקות 👍")
+            await query.edit_message_text("\n".join(lines), parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט ראשי", callback_data="menu_back")]]))
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
         return
 
     if action == "menu_help":
@@ -1086,6 +1112,28 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json(HISTORY_FILE, history)
     save_json(PENDING_FILE, pending_plans)
     await update.message.reply_text("🔄 שיחה אופסה.")
+
+
+async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cleanup — מחק עמודות ריקות מכל גיליונות הנוכחות."""
+    msg = await update.message.reply_text("🧹 מנקה עמודות ריקות מכל הגיליונות...")
+    try:
+        results = att.cleanup_all_empty_columns()
+        lines = ["✅ *ניקוי הושלם*\n"]
+        total = 0
+        for branch, groups in results.items():
+            branch_total = sum(v for v in groups.values() if v > 0)
+            total += branch_total
+            if branch_total > 0:
+                lines.append(f"*{branch}*: נמחקו {branch_total} עמודות")
+                for group, count in groups.items():
+                    if count > 0:
+                        lines.append(f"  • {group}: {count}")
+        if total == 0:
+            lines.append("לא נמצאו עמודות ריקות 👍")
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה: {e}")
 
 
 async def dropouts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1762,6 +1810,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("cleanup", cleanup_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("dropouts", dropouts_command))
     app.add_handler(CommandHandler("design", design_command))
