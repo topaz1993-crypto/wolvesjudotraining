@@ -1030,20 +1030,28 @@ def _build_data_context(text: str) -> str:
 
 async def _calendar_query(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str):
     """Fetch calendar events for query_text and reply with Claude analysis."""
-    user_id = str(update.effective_user.id)
     await update.message.chat.send_action("typing")
     try:
         date_from, date_to = cal.parse_date_range_hebrew(query_text)
         events = cal.get_events_range(date_from, date_to)
+        # Limit to 40 events max to avoid token overflow
+        events = events[:40]
         events_text = cal.format_events_for_claude(events, date_from, date_to)
-        prompt = (
-            f"[יומן Google — נתונים חיים]\n{events_text}\n\n"
-            f"שאלה: {query_text}\n\n"
-            "נתח את האירועים האלה והצג סיכום מסודר ושימושי. "
-            "ציין אימונים, משימות ג'ודו, פגישות ואירועים אישיים. "
-            "הדגש דברים דחופים. תן המלצות אם רלוונטי. ענה בעברית."
+        system = (
+            "אתה עוזר אישי של טופז זבארי, מאמן ג'ודו. "
+            "קיבלת נתונים מ-Google Calendar שלו. "
+            "סכם את האירועים בצורה מסודרת ושימושית. "
+            "הדגש אימוני ג'ודו, משימות דחופות ואירועים חשובים. "
+            "ענה בעברית, קצר וברור."
         )
-        reply = await call_claude(user_id, prompt)
+        # Fresh Claude call — no history, to avoid token overflow
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system=system,
+            messages=[{"role": "user", "content": events_text}],
+        )
+        reply = response.content[0].text
     except Exception as e:
         log.error("Calendar query error: %s", e)
         reply = f"❌ שגיאה בשליפת היומן: {e}"
