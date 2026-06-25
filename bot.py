@@ -176,15 +176,59 @@ async def deliver_csv(context, chat_id: str, reply_text: str, csv_content: str):
     )
 
 
+def main_menu_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📅 יומן היום",    callback_data="menu_today"),
+            InlineKeyboardButton("📆 יומן השבוע",   callback_data="menu_week"),
+        ],
+        [
+            InlineKeyboardButton("📋 יומן החודש",   callback_data="menu_month"),
+            InlineKeyboardButton("➕ הוסף ליומן",   callback_data="menu_cal_add"),
+        ],
+        [
+            InlineKeyboardButton("🥋 תוכנית אימון", callback_data="menu_plan"),
+            InlineKeyboardButton("✅ נוכחות",        callback_data="menu_attendance"),
+        ],
+        [
+            InlineKeyboardButton("🏕️ מחנה קיץ",    callback_data="menu_camp"),
+            InlineKeyboardButton("🌙 לילה יפני",    callback_data="menu_lyla"),
+        ],
+        [
+            InlineKeyboardButton("📊 סטטיסטיקות",   callback_data="menu_stats"),
+            InlineKeyboardButton("❓ עזרה",          callback_data="menu_help"),
+        ],
+    ])
+
+
+def attendance_menu_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔵 סירקין",    callback_data="menu_att_סירקין"),
+            InlineKeyboardButton("🟢 חגור",      callback_data="menu_att_חגור"),
+        ],
+        [
+            InlineKeyboardButton("🟡 נווה ירק",  callback_data="menu_att_נווה ירק"),
+            InlineKeyboardButton("🟣 אהרונוביץ", callback_data="menu_att_אהרונוביץ"),
+        ],
+        [InlineKeyboardButton("🔙 חזרה",         callback_data="menu_back")],
+    ])
+
+
+async def show_main_menu(update, text="👋 שלום טופז! מה תרצה לעשות?"):
+    markup = main_menu_markup()
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, reply_markup=markup)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 שלום! אני סוכן תוכניות האימון של מועדון וולבס.\n\n"
-        "שלח לי בקשה כמו:\n"
-        "  • *חגור יום א׳, גנים + א-ג*\n"
-        "  • *סירקין יום ב׳, ד-ו, יש תחרות בעוד שבועיים*\n\n"
-        "אציע תוכנית — תאשר בכפתור או תבקש שינויים.",
-        parse_mode="Markdown",
-    )
+    await show_main_menu(update)
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_main_menu(update)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,6 +307,89 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+
+    # ─── Main menu callbacks ───
+    if action == "menu_back":
+        await show_main_menu(update)
+        await query.answer()
+        return
+
+    if action == "menu_today":
+        await query.answer()
+        await _calendar_query(update, context, "היום")
+        return
+
+    if action == "menu_week":
+        await query.answer()
+        await _calendar_query(update, context, "השבוע")
+        return
+
+    if action == "menu_month":
+        await query.answer()
+        await _calendar_query(update, context, "החודש")
+        return
+
+    if action == "menu_cal_add":
+        await query.answer()
+        await query.edit_message_text(
+            "📝 שלח לי מה להוסיף ליומן\nלדוגמה: *מחר ב-10:00 פגישה עם אבא של בועז*",
+            parse_mode="Markdown",
+        )
+        return
+
+    if action == "menu_plan":
+        await query.answer()
+        await query.edit_message_text(
+            "🥋 שלח לי בקשה לתוכנית אימון\nלדוגמה: *סירקין יום ב׳, ד-ו וז-בוגרים*",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]),
+        )
+        return
+
+    if action == "menu_attendance":
+        await query.answer()
+        await query.edit_message_text("✅ נוכחות — בחר סניף:", reply_markup=attendance_menu_markup())
+        return
+
+    if action.startswith("menu_att_"):
+        branch = action.replace("menu_att_", "")
+        await query.answer()
+        await query.edit_message_text(f"✅ נוכחות {branch} — שלח: *נוכחות {branch}*", parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_attendance")]]))
+        context.user_data["pending_branch"] = branch
+        return
+
+    if action == "menu_camp":
+        await query.answer()
+        await camp_command(update, context)
+        return
+
+    if action == "menu_lyla":
+        await query.answer()
+        await lyla_command(update, context)
+        return
+
+    if action == "menu_stats":
+        await query.answer()
+        await stats_command(update, context)
+        return
+
+    if action == "menu_help":
+        await query.answer()
+        help_text = (
+            "💡 *מה אני יכול לעשות?*\n\n"
+            "📅 *יומן* — מה יש לי היום/השבוע/החודש\n"
+            "➕ *הוסף ליומן* — מחר ב-10:00 פגישה עם X\n"
+            "🥋 *תוכנית אימון* — סירקין יום ב׳, ד-ו\n"
+            "✅ *נוכחות* — נוכחות סירקין\n"
+            "🏕️ *מחנה קיץ* — רשימת ילדים, עדכונים\n"
+            "🌙 *לילה יפני* — רשימת משתתפים\n"
+            "💬 *כל שאלה חופשית* — שאל אותי כל מה שתרצה\n\n"
+            "או פשוט כתוב לי מה שאתה צריך 😊"
+        )
+        await query.edit_message_text(help_text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
+        return
+    # ─────────────────────────────
 
     # Undo dropout
     if action == "att_undo_dropout":
@@ -1525,6 +1652,7 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("dropouts", dropouts_command))
     app.add_handler(CommandHandler("design", design_command))
