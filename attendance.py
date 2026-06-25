@@ -419,6 +419,29 @@ def prepare_attendance(branch: str, group: str) -> dict:
     }
 
 
+def _recolor_name_cols(service, spreadsheet_id: str, sheet_name: str, sheet_id: int):
+    """Re-apply alternating blue to name columns (A-C) for all student rows."""
+    students = get_students(service, spreadsheet_id, sheet_name)
+    if not students:
+        return
+    req = []
+    for i, (row, _) in enumerate(students):
+        bg = _ROW_A if i % 2 == 0 else _ROW_B
+        req.append({"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": row - 1, "endRowIndex": row,
+                       "startColumnIndex": 0, "endColumnIndex": 3},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": bg,
+                "textFormat": {"fontSize": 11},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+        }})
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": req}
+    ).execute()
+
+
 def mark_attendance(session: dict, absent_indices: set[int]):
     """
     Mark attendance in the sheet.
@@ -451,6 +474,9 @@ def mark_attendance(session: dict, absent_indices: set[int]):
         spreadsheetId=spreadsheet_id,
         body={"requests": requests}
     ).execute()
+
+    # Re-sync blue on name columns after every save
+    _recolor_name_cols(service, spreadsheet_id, session["sheet_name"], sheet_id)
 
 
 def add_new_student(session: dict, first_name: str, last_name: str) -> tuple[int, str]:
@@ -657,13 +683,14 @@ def undo_dropouts() -> list:
             }}]}
         ).execute()
 
-    # Renumber active sheets (one call per unique spreadsheet+sheet_name combo)
+    # Renumber active sheets + re-sync blue name columns
     seen = set()
     for undo in undos:
         key = (undo["spreadsheet_id"], undo["sheet_name"])
         if key not in seen:
             seen.add(key)
             _renumber_students(service, undo["spreadsheet_id"], undo["sheet_name"])
+            _recolor_name_cols(service, undo["spreadsheet_id"], undo["sheet_name"], undo["sheet_id"])
 
     # Delete calendar reminders that were created for these dropouts
     import absence_tracker as _abt
