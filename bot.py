@@ -777,26 +777,7 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Calendar query — "מה יש לי היום/השבוע/..."
     if any(t in text for t in CAL_QUERY_TRIGGERS):
-        await update.message.chat.send_action("typing")
-        try:
-            date_from, date_to = cal.parse_date_range_hebrew(text)
-            events = cal.get_events_range(date_from, date_to)
-            events_text = cal.format_events_for_claude(events, date_from, date_to)
-            prompt = (
-                f"[יומן Google — נתונים חיים]\n{events_text}\n\n"
-                f"שאלת המשתמש: {text}\n\n"
-                "נתח את האירועים האלה והצג סיכום שימושי ומסודר. "
-                "ציין את האימונים, המשימות, הפגישות. "
-                "אם יש משימות הקשורות לג'ודו — הדגש אותן. "
-                "תן המלצות אם רלוונטי."
-            )
-            reply = await call_claude(user_id, prompt)
-        except Exception as e:
-            log.error("Calendar query error: %s", e)
-            reply = f"❌ שגיאה בשליפת היומן: {e}"
-        chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
-        for chunk in chunks:
-            await update.message.reply_text(chunk)
+        await _calendar_query(update, context, text)
         return True
 
     # Delete request
@@ -1045,6 +1026,46 @@ def _build_data_context(text: str) -> str:
             pass
 
     return "\n\n".join(parts)
+
+
+async def _calendar_query(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str):
+    """Fetch calendar events for query_text and reply with Claude analysis."""
+    user_id = str(update.effective_user.id)
+    await update.message.chat.send_action("typing")
+    try:
+        date_from, date_to = cal.parse_date_range_hebrew(query_text)
+        events = cal.get_events_range(date_from, date_to)
+        events_text = cal.format_events_for_claude(events, date_from, date_to)
+        prompt = (
+            f"[יומן Google — נתונים חיים]\n{events_text}\n\n"
+            f"שאלה: {query_text}\n\n"
+            "נתח את האירועים האלה והצג סיכום מסודר ושימושי. "
+            "ציין אימונים, משימות ג'ודו, פגישות ואירועים אישיים. "
+            "הדגש דברים דחופים. תן המלצות אם רלוונטי. ענה בעברית."
+        )
+        reply = await call_claude(user_id, prompt)
+    except Exception as e:
+        log.error("Calendar query error: %s", e)
+        reply = f"❌ שגיאה בשליפת היומן: {e}"
+    chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
+    for chunk in chunks:
+        await update.message.reply_text(chunk)
+
+
+async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _calendar_query(update, context, "היום")
+
+
+async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _calendar_query(update, context, "מחר")
+
+
+async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _calendar_query(update, context, "השבוע")
+
+
+async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _calendar_query(update, context, "החודש")
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1502,6 +1523,10 @@ def main():
     app.add_handler(CommandHandler("camp", camp_command))
     app.add_handler(CommandHandler("lyla", lyla_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("today", today_command))
+    app.add_handler(CommandHandler("tomorrow", tomorrow_command))
+    app.add_handler(CommandHandler("week", week_command))
+    app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     log.info("Bot started...")
