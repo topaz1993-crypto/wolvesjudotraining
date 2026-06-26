@@ -210,7 +210,7 @@ async def send_long(update: Update, text: str, reply_markup=None):
 CORRECTION_TRIGGERS = ("לא זה", "לא נכון", "תיקון:", "שגוי", "טעית", "תיקן:", "זה לא מה ש",
                        "לא רציתי", "לא ביקשתי", "לא כך", "לא ככה", "תשנה", "תתקן")
 
-async def call_claude(user_id: str, user_content: str, image_b64: str | None = None) -> str:
+async def call_claude(user_id: str, user_content: str, image_b64=None) -> str:
     # Detect corrections and save them
     if any(t in user_content for t in CORRECTION_TRIGGERS):
         hist = get_history(user_id)
