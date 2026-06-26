@@ -504,15 +504,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
         return
 
-    if action == "belt_add_cal":
+    if action.startswith("belt_add_cal"):
         await query.answer()
-        ev = pending_belt_events.get(user_id)
-        if not ev:
-            await query.message.reply_text("❌ לא נמצא אירוע להוסיף. הכן שוב הודעת חגורה.")
-            return
-        sheets_sessions[user_id] = {"step": "belt_cal_date", **ev}
+        parts = action.split("|")
+        child_name   = parts[1] if len(parts) > 1 else ""
+        belt_color   = parts[2] if len(parts) > 2 else ""
+        ceremony_day = parts[3] if len(parts) > 3 else ""
+        sheets_sessions[user_id] = {
+            "step": "belt_cal_date",
+            "child_name": child_name,
+            "belt_color": belt_color,
+            "ceremony_day": ceremony_day,
+        }
         await query.message.reply_text(
-            f"📅 מה התאריך המדויק של יום *{ev['ceremony_day']}*?\n(לדוגמה: `27/6` או `4/7`)",
+            f"📅 מה התאריך המדויק של יום *{ceremony_day}*?\n(לדוגמה: `27/6` או `4/7`)",
             parse_mode="Markdown"
         )
         return
@@ -1714,18 +1719,12 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{payment_url}"
         )
 
-        # Store for calendar use
-        pending_belt_events[user_id] = {
-            "child_name": child_name,
-            "belt_color": belt_color,
-            "ceremony_day": ceremony_day,
-        }
-
+        cal_data = f"belt_add_cal|{child_name}|{belt_color}|{ceremony_day}"
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 הוסף ליומן", callback_data="belt_add_cal")],
+            [InlineKeyboardButton("📅 הוסף ליומן", callback_data=cal_data)],
             [InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")],
         ])
-        await update.message.reply_text(msg, reply_markup=markup)
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
         return True
 
     # ── Belt calendar event ───────────────────────────────────────────────────────
