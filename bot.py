@@ -541,15 +541,145 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_belt_msg":
         await query.answer()
+        sheets_sessions[user_id] = {"step": "belt_wizard_name"}
         await query.message.reply_text(
-            "📝 שלח לי את הפרטים:\n"
-            "*שם, צבע חגורה, יום הטקס, סניף, קבוצה* (ואם יש — קישור לסרטון)\n\n"
-            "לדוגמה:\n`מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`\n"
-            "או בלי קישור:\n`רוני, כתומה, שני, סירקין, א-ב`",
+            "🎌 *שם הילד/ה?*",
             parse_mode="Markdown",
             reply_markup=cancel_button()
         )
-        sheets_sessions[user_id] = {"step": "belt_msg_details"}
+        return
+
+    # ── Belt wizard — color picker ──
+    if action.startswith("bw_color|"):
+        await query.answer()
+        color = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["belt_color"] = color
+        ss["step"] = "belt_wizard_branch"
+        sheets_sessions[user_id] = ss
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("סירקין", callback_data="bw_branch|סירקין"),
+             InlineKeyboardButton("חגור", callback_data="bw_branch|חגור")],
+            [InlineKeyboardButton("נווה ירק", callback_data="bw_branch|נווה ירק"),
+             InlineKeyboardButton("אהרונוביץ", callback_data="bw_branch|אהרונוביץ")],
+            [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+        ])
+        await query.message.reply_text(f"✅ {color}\n\n🏠 *איזה סניף?*", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # ── Belt wizard — branch picker ──
+    if action.startswith("bw_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["branch"] = branch
+        ss["step"] = "belt_wizard_group"
+        sheets_sessions[user_id] = ss
+
+        GROUPS = {
+            "סירקין":    [("ד-ו","bw_group|ד-ו"), ("ג","bw_group|ג"), ("א-ב","bw_group|א-ב"),
+                          ("גנים","bw_group|גנים"), ("ז-בוגרים","bw_group|ז-בוגרים"), ("נבחרת","bw_group|נבחרת")],
+            "חגור":      [("ד-ח","bw_group|ד-ח"), ("א-ג","bw_group|א-ג"), ("גנים","bw_group|גנים")],
+            "נווה ירק":  [("גנים","bw_group|גנים"), ("ג-ז","bw_group|ג-ז"), ("א-ב","bw_group|א-ב")],
+            "אהרונוביץ": [("א-ה","bw_group|א-ה")],
+        }
+        rows = []
+        for label, cb in GROUPS.get(branch, []):
+            rows.append([InlineKeyboardButton(label, callback_data=cb)])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.message.reply_text(f"✅ {branch}\n\n👥 *איזו קבוצה?*", parse_mode="Markdown",
+                                        reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    # ── Belt wizard — group picker ──
+    if action.startswith("bw_group|"):
+        await query.answer()
+        group = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["group"] = group
+        branch = ss.get("branch", "")
+        sheets_sessions[user_id] = ss
+
+        # Schedule: (branch, group) → list of (day, end_time)
+        SCHED = {
+            ("סירקין", "ד-ו"):       [("שני", "15:30"), ("חמישי", "15:30")],
+            ("סירקין", "ג"):          [("שני", "16:30"), ("חמישי", "16:30")],
+            ("סירקין", "א-ב"):        [("שני", "17:15"), ("חמישי", "17:15")],
+            ("סירקין", "גנים"):       [("חמישי", "18:00")],
+            ("סירקין", "ז-בוגרים"):  [("שני", "19:30"), ("חמישי", "19:30")],
+            ("סירקין", "נבחרת"):      [("שישי", "15:00")],
+            ("חגור",   "ד-ח"):        [("ראשון", "16:30")],
+            ("חגור",   "א-ג"):        [("ראשון", "17:15")],
+            ("חגור",   "גנים"):       [("ראשון", "18:00")],
+            ("נווה ירק","גנים"):      [("שלישי", "16:45")],
+            ("נווה ירק","ג-ז"):       [("שלישי", "17:45")],
+            ("נווה ירק","א-ב"):       [("שלישי", "18:30")],
+            ("אהרונוביץ","א-ה"):      [("רביעי", "14:50")],
+        }
+        options = SCHED.get((branch, group), [])
+
+        if len(options) == 1:
+            # Only one day — skip day picker
+            day, end_time = options[0]
+            h, m = map(int, end_time.split(":"))
+            total = h * 60 + m - 10
+            ceremony_time = f"{total//60:02d}:{total%60:02d}"
+            ss["ceremony_day"] = day
+            ss["ceremony_time"] = ceremony_time
+            ss["step"] = "belt_wizard_link"
+            sheets_sessions[user_id] = ss
+            await query.message.reply_text(
+                f"✅ {group} — יום {day} ב-{ceremony_time}\n\n"
+                "📸 *קישור לסרטון המבחן?* (אופציונלי)",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("דלג ➡️", callback_data="bw_link|skip")],
+                    [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+                ])
+            )
+        else:
+            # Multiple days — ask which day
+            ss["step"] = "belt_wizard_day"
+            sheets_sessions[user_id] = ss
+            rows = [[InlineKeyboardButton(f"יום {day} ({end_time})", callback_data=f"bw_day|{day}|{end_time}")]
+                    for day, end_time in options]
+            rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+            await query.message.reply_text(
+                f"✅ {group}\n\n📅 *באיזה יום יהיה הטקס?*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(rows)
+            )
+        return
+
+    # ── Belt wizard — day picker (for groups with 2 days) ──
+    if action.startswith("bw_day|"):
+        await query.answer()
+        _, day, end_time = action.split("|")
+        ss = sheets_sessions.get(user_id, {})
+        h, m = map(int, end_time.split(":"))
+        total = h * 60 + m - 10
+        ceremony_time = f"{total//60:02d}:{total%60:02d}"
+        ss["ceremony_day"] = day
+        ss["ceremony_time"] = ceremony_time
+        ss["step"] = "belt_wizard_link"
+        sheets_sessions[user_id] = ss
+        await query.message.reply_text(
+            f"✅ יום {day} ב-{ceremony_time}\n\n📸 *קישור לסרטון המבחן?* (אופציונלי)",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("דלג ➡️", callback_data="bw_link|skip")],
+                [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+            ])
+        )
+        return
+
+    # ── Belt wizard — video link (skip or typed) handled in text handler ──
+    if action == "bw_link|skip":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        ss["video_link"] = ""
+        sheets_sessions[user_id] = ss
+        await _belt_wizard_finish(query.message, user_id)
         return
 
     if action == "menu_belt_pay":
@@ -1309,6 +1439,65 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return True
 
 
+async def _belt_wizard_finish(message, user_id: str):
+    """Generate belt ceremony WhatsApp message and add to calendar."""
+    import datetime as _dt
+    ss = sheets_sessions.pop(user_id, {})
+
+    child_name    = ss.get("child_name", "")
+    belt_color    = ss.get("belt_color", "")
+    ceremony_day  = ss.get("ceremony_day", "")
+    ceremony_time = ss.get("ceremony_time", "")
+    video_link    = ss.get("video_link", "")
+    payment_url   = "https://private.invoice4u.co.il/Clearing/Invoice4UClearing.aspx?ProductId=4476&mobileApp=true"
+
+    female_names = {"נועה","שירה","מיה","מאיה","ליאת","יעל","שרה","רחל","לאה","אורית","מורית","דנה",
+                    "שני","ענת","לירן","הילה","ליה","ליאה","אביגיל","נגה","הדס","הדר","מרים","נעמי",
+                    "עינב","טל","ניצן","כרמל","נורית","גלית","שפרה","נטע","גאיה","תו","רוני"}
+    is_female = any(n in child_name for n in female_names)
+    suffix_verb = "עשתה" if is_female else "עשה"
+    suffix_pass = "עברה" if is_female else "עבר"
+
+    video_part = f"\n*מצורף סרטון למבחן*\n{video_link}" if video_link else ""
+    msg = (
+        f"היי,\n"
+        f"אני שמח לעדכן ש{child_name} {suffix_verb} מבחן לחגורה {belt_color} ו{suffix_pass} בהצלחה! 🥳\n\n"
+        f"ביום *{ceremony_day}* נקיים טקס מעבר חגורה כ-10 דקות לקראת סוף האימון.\n"
+        f"אתם מוזמנים להגיע, לצלם ולהביא כיבוד בריא (פירות, ירקות וכו׳). *לא חובה*"
+        f"{video_part}\n\n"
+        f"*עלות חגורה ותעודה - 60 ₪*\n"
+        f"*ניתן לרכוש חגורה באמצעות הקישור או להתארגן באופן עצמאי.*\n"
+        f"{payment_url}"
+    )
+
+    # Find next occurrence of ceremony_day
+    cal_status = ""
+    try:
+        day_map = {"ראשון":6,"שני":0,"שלישי":1,"רביעי":2,"חמישי":3,"שישי":4,"שבת":5}
+        today = _dt.date.today()
+        target = day_map.get(ceremony_day)
+        if target is not None:
+            days_ahead = (target - today.weekday()) % 7 or 7
+            event_date = today + _dt.timedelta(days=days_ahead)
+        else:
+            event_date = today
+
+        cal.add_event(
+            calendar_name="טקסי מעבר חגורה",
+            title=f"טקס מעבר חגורה — {child_name} ({belt_color})",
+            event_date=event_date,
+            time_str=ceremony_time or None,
+            description=f"טקס מעבר חגורה {belt_color} ל{child_name}. כ-10 דקות לפני סוף האימון.",
+        )
+        time_disp = f" ב-{ceremony_time}" if ceremony_time else ""
+        cal_status = f"\n\n✅ *נוסף ביומן:* {event_date.strftime('%d/%m/%Y')}{time_disp} (10 דק׳)"
+    except Exception as e:
+        cal_status = f"\n\n⚠️ לא הצלחתי להוסיף ליומן: {e}"
+
+    await message.reply_text(msg + cal_status, parse_mode="Markdown",
+                              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה לחגורות", callback_data="menu_belts")]]))
+
+
 async def _create_calendar_event(chat_id, user_id: str, cs: dict, bot):
     """Actually create the event and send confirmation."""
     calendar_sessions.pop(user_id, None)
@@ -1787,6 +1976,32 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     step = ss.get('step')
 
     # ── Belt ceremony message ────────────────────────────────────────────────────
+    # ── Belt wizard — name input ──────────────────────────────────────────────────
+    if step == 'belt_wizard_name':
+        child_name = text.strip()
+        ss["child_name"] = child_name
+        ss["step"] = "belt_wizard_color"
+        sheets_sessions[user_id] = ss
+        COLORS = [("לבנה","bw_color|לבנה"), ("צהובה","bw_color|צהובה"), ("כתומה","bw_color|כתומה"),
+                  ("ירוקה","bw_color|ירוקה"), ("כחולה","bw_color|כחולה"), ("חומה","bw_color|חומה"), ("שחורה","bw_color|שחורה")]
+        rows = []
+        for i in range(0, len(COLORS), 3):
+            rows.append([InlineKeyboardButton(c[0], callback_data=c[1]) for c in COLORS[i:i+3]])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await update.message.reply_text(
+            f"✅ *{child_name}*\n\n🥋 *איזו חגורה?*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return True
+
+    # ── Belt wizard — video link input ────────────────────────────────────────────
+    if step == 'belt_wizard_link':
+        ss["video_link"] = text.strip() if text.startswith("http") else ""
+        sheets_sessions[user_id] = ss
+        await _belt_wizard_finish(update.message, user_id)
+        return True
+
     if step == 'belt_msg_details':
         sheets_sessions.pop(user_id, None)
         # Parse: name, belt_color, day, branch, group[, link]
