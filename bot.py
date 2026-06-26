@@ -1800,13 +1800,36 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{payment_url}"
         )
 
-        time_note = f" | 🕐 {ceremony_time}" if ceremony_time else ""
-        cal_data = f"belt_add_cal|{child_name}|{belt_color}|{ceremony_day}|{ceremony_time or ''}"
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📅 הוסף ליומן{time_note}", callback_data=cal_data)],
-            [InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")],
-        ])
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
+        # Auto-add to Google Calendar
+        from datetime import date as date_cls
+        cal_status = ""
+        try:
+            # Find next occurrence of ceremony_day
+            day_map = {"ראשון": 6, "שני": 0, "שלישי": 1, "רביעי": 2, "חמישי": 3, "שישי": 4, "שבת": 5}
+            today = date_cls.today()
+            target_weekday = next((v for k, v in day_map.items() if k in ceremony_day), None)
+            if target_weekday is not None:
+                days_ahead = (target_weekday - today.weekday()) % 7
+                if days_ahead == 0:
+                    days_ahead = 7
+                event_date = today + __import__("datetime").timedelta(days=days_ahead)
+            else:
+                event_date = today
+
+            cal.add_event(
+                calendar_name="טקסי מעבר חגורה",
+                title=f"טקס מעבר חגורה — {child_name} ({belt_color})",
+                event_date=event_date,
+                time_str=ceremony_time or None,
+                description=f"טקס מעבר חגורה {belt_color} ל{child_name}. כ-10 דקות לפני סוף האימון.",
+            )
+            time_display = f" ב-{ceremony_time}" if ceremony_time else ""
+            cal_status = f"\n\n✅ *נוסף ביומן:* {event_date.strftime('%d/%m/%Y')}{time_display}"
+        except Exception as e:
+            cal_status = f"\n\n⚠️ לא הצלחתי להוסיף ליומן: {e}"
+
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]])
+        await update.message.reply_text(msg + cal_status, parse_mode="Markdown", reply_markup=markup)
         return True
 
     # ── Belt calendar event ───────────────────────────────────────────────────────
