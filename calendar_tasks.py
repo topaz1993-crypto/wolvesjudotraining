@@ -24,6 +24,7 @@ CALENDARS = {
     "אימונים טופז":         "300e5npvj9576rq638hoh3f7co@group.calendar.google.com",
     "חליפות ג'ודו":         "j040nkmgkoebugf99te0f3lqig@group.calendar.google.com",
     "טקסי מעבר חגורה":     "3b6975eud45u89jp5khish2124@group.calendar.google.com",
+    "טקסי חגורה":          "3b6975eud45u89jp5khish2124@group.calendar.google.com",
     "קורס מאמנים":          "tca60i9to8e0pqospm5r5o3uc8@group.calendar.google.com",
     "פגישות":               "p0q85imabp45mt1sq9l08hg79c@group.calendar.google.com",
     "משימות אישיות":        "family05439189821712760801@group.calendar.google.com",

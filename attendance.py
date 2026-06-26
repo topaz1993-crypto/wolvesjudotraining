@@ -31,6 +31,8 @@ BRANCH_SHEETS = {
     "חגור":        "18p087VLNCRqPOhGbDzUeEg4YIHatiCfSc7v8NVFEPHA",
 }
 
+PAYMENTS_SHEET_ID = "1hzkQZhmtIPL2S11Z399OmJik3pqKyOQsFp33tTNij5o"
+
 # Tab names per branch (for fuzzy matching)
 BRANCH_GROUPS = {
     "סירקין":     ["ד-ו", "ג", "א-ב", "גנים", "ז-בוגרים", "נבחרת צעירה", "נבחרת בוגרת", "איפון פייט ב-ד", "איפון פייט ה-ז"],
