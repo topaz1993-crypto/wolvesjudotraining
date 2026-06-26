@@ -405,12 +405,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         csv_content = reply[csv_start:csv_end].strip()
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
-        # store original user text + Claude reply for direct save
-        pending_plans[user_id] = {"reply": reply, "original": user_text}
-        save_json(PENDING_FILE, pending_plans)
+        # Don't show training plan buttons for belt/calendar/general responses
+        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום", "אימון:")
+        is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 3
+
+        if is_training_plan:
+            pending_plans[user_id] = {"reply": reply, "original": user_text}
+            save_json(PENDING_FILE, pending_plans)
+
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
-            markup = plan_buttons() if i == len(chunks) - 1 else None
+            markup = plan_buttons() if (is_training_plan and i == len(chunks) - 1) else None
             await update.message.reply_text(chunk, reply_markup=markup)
 
 
