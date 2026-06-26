@@ -151,7 +151,7 @@ PLAN_GROUPS = {
     "חגור":      ["ד-ח", "א-ג", "גנים"],
     "נווה ירק":  ["גנים", "ג-ז", "א-ב"],
     "אהרונוביץ": ["א-ה"],
-    "פונקציונלי":["ז-ח", "ט-יב"],
+    "פונקציונלי":["ז-ח", 'ט-י"ב'],
     "נבחרת":     ["נבחרת"],
 }
 
@@ -483,7 +483,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     extra_context = ""
     for branch in ["חגור", "סירקין", "נווה ירק", "אהרונוביץ", "איפון פייט", "פונקציונלי", "נבחרת"]:
         if branch in user_text:
-            for group in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ו", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז-בוגרים", "ט-יב"]:
+            for group in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ו", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז-בוגרים", 'ט-י"ב']:
                 if group in user_text:
                     extra_context = get_recent_trainings(branch, group)
                     break
@@ -1620,7 +1620,7 @@ async def _plan_wizard_extract(branch: str, group: str, plan_text: str) -> list[
     # Determine row labels by branch/group
     if branch == "פונקציונלי":
         row_labels = ["חימום", "תרגול א", "תרגול ב", "תרגול ג", "תרגול ד", "כוח", "הערות", "סיום"]
-    elif group in ("נבחרת", "ז-בוגרים", "ז-ח", "ט-יב"):
+    elif group in ("נבחרת", "ז-בוגרים", "ז-ח", 'ט-י"ב'):
         row_labels = ["חימום", "טכניקה", "תרגול", "קרבות א", "קרבות ב", "כוח", "הערות", "סיום"]
     else:
         row_labels = ["חימום", "תרגול א", "תרגול ב", "קרבות", "כוח", "הערות", "סיום", ""]
