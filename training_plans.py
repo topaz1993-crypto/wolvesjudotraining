@@ -72,7 +72,7 @@ def _col_letter(col_0: int) -> str:
     return result
 
 
-def _parse_date(cell: str) -> date_cls | None:
+def _parse_date(cell: str):
     """Parse D/M or D/M/YYYY date string."""
     import re
     m = re.match(r'(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?', cell.strip())
