@@ -1328,7 +1328,14 @@ async def design_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     count += 1
                 except Exception as e:
                     errors.append(f"{branch}/{group}: {e}")
-        result = f"✅ עיצוב הוחל על {count} גיליונות"
+        # Also design training plans sheet
+        try:
+            plans_result = tp.design_all_tabs(delete_empty=True)
+            count_plans = plans_result.count("✅")
+            result = f"✅ עיצוב הוחל על {count} גיליונות נוכחות + {count_plans} תוכניות אימון"
+        except Exception as e:
+            result = f"✅ עיצוב הוחל על {count} גיליונות"
+            errors.append(f"תוכניות אימון: {e}")
         if errors:
             result += "\n\n⚠️ שגיאות:\n" + "\n".join(errors)
         await msg.edit_text(result)

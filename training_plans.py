@@ -4,8 +4,8 @@ Sheet ID: 1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I
 Structure: row1 = headers (שעה, קבוצה, date1, date2...), then group blocks with content rows.
 """
 
-import os, pickle, base64, warnings, re
-from datetime import datetime, date
+import os, pickle, base64, warnings
+from datetime import date as date_cls
 warnings.filterwarnings("ignore")
 import googleapiclient.discovery
 
@@ -21,11 +21,20 @@ BRANCH_TABS = {
     "נבחרת":      "נבחרת",
 }
 
-_HEADER_BG  = {"red": 0.13, "green": 0.19, "blue": 0.36}
+ALL_TABS = list(BRANCH_TABS.values())
+
+# ── Color palette ──────────────────────────────────────────────────────────────
+_NAVY       = {"red": 0.13, "green": 0.19, "blue": 0.36}
 _WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
-_DATE_BG    = {"red": 0.82, "green": 0.85, "blue": 0.89}
-_ROW_A      = {"red": 0.95, "green": 0.96, "blue": 1.00}
+_DATE_BG    = {"red": 0.82, "green": 0.87, "blue": 0.95}   # normal date header
+_TODAY_BG   = {"red": 0.20, "green": 0.66, "blue": 0.32}   # today's column header (green)
+_TODAY_CELL = {"red": 0.90, "green": 1.00, "blue": 0.90}   # today's column content cells
+_GROUP_A    = {"red": 0.18, "green": 0.39, "blue": 0.60}   # group header shade 1
+_GROUP_B    = {"red": 0.24, "green": 0.48, "blue": 0.68}   # group header shade 2
+_ROW_A      = {"red": 0.95, "green": 0.97, "blue": 1.00}
 _ROW_B      = {"red": 1.00, "green": 1.00, "blue": 1.00}
+_BORDER     = {"red": 0.7,  "green": 0.7,  "blue": 0.8}
+_BLACK      = {"red": 0.0,  "green": 0.0,  "blue": 0.0}
 
 
 def _get_service():
@@ -54,7 +63,262 @@ def _read_tab(service, tab_name: str) -> list:
     return res.get("values", [])
 
 
-def _find_or_create_date_col(service, tab_name: str, plan_date: date) -> int:
+def _col_letter(col_0: int) -> str:
+    result = ""
+    col_0 += 1
+    while col_0 > 0:
+        col_0, remainder = divmod(col_0 - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _parse_date(cell: str) -> date_cls | None:
+    """Parse D/M or D/M/YYYY date string."""
+    import re
+    m = re.match(r'(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?', cell.strip())
+    if not m:
+        return None
+    d, mo = int(m.group(1)), int(m.group(2))
+    y = int(m.group(3)) if m.group(3) else date_cls.today().year
+    if y < 100:
+        y += 2000
+    try:
+        return date_cls(y, mo, d)
+    except ValueError:
+        return None
+
+
+def _find_empty_date_cols(rows: list, header: list) -> list[int]:
+    """Return 0-based indices of date columns (col>=2) where ALL content rows are empty."""
+    empty = []
+    for c in range(2, len(header)):
+        has_content = any(c < len(row) and row[c].strip() for row in rows[1:])
+        if not has_content:
+            empty.append(c)
+    return empty
+
+
+def _delete_columns(service, sheet_id: int, col_indices: list[int]):
+    """Delete columns by 0-based index, right-to-left so indices stay valid."""
+    for c in sorted(col_indices, reverse=True):
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{"deleteDimension": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                          "startIndex": c, "endIndex": c + 1}
+            }}]}
+        ).execute()
+
+
+def _find_group_rows(rows: list) -> list[tuple[int, int, str]]:
+    """Return list of (start_row_0, end_row_0_excl, group_name) for each group block."""
+    blocks = []
+    block_start = None
+    group_name = ""
+    for i, row in enumerate(rows):
+        if len(row) >= 2 and row[1].strip():
+            if block_start is not None:
+                blocks.append((block_start, i, group_name))
+            block_start = i
+            group_name = row[1].strip()
+        elif block_start is None:
+            pass  # skip header row
+    if block_start is not None:
+        blocks.append((block_start, len(rows), group_name))
+    return blocks
+
+
+def _repeat_cell(sheet_id, r1, r2, c1, c2, fmt):
+    return {"repeatCell": {
+        "range": {"sheetId": sheet_id, "startRowIndex": r1, "endRowIndex": r2,
+                  "startColumnIndex": c1, "endColumnIndex": c2},
+        "cell": {"userEnteredFormat": fmt},
+        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
+    }}
+
+
+def _border_range(sheet_id, r1, r2, c1, c2):
+    b = {"style": "SOLID", "color": _BORDER}
+    return {"updateBorders": {
+        "range": {"sheetId": sheet_id, "startRowIndex": r1, "endRowIndex": r2,
+                  "startColumnIndex": c1, "endColumnIndex": c2},
+        "top": b, "bottom": b, "left": b, "right": b,
+        "innerHorizontal": b, "innerVertical": b,
+    }}
+
+
+def _col_width(sheet_id, c1, c2, px):
+    return {"updateDimensionProperties": {
+        "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                  "startIndex": c1, "endIndex": c2},
+        "properties": {"pixelSize": px}, "fields": "pixelSize",
+    }}
+
+
+def _row_height(sheet_id, r1, r2, px):
+    return {"updateDimensionProperties": {
+        "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                  "startIndex": r1, "endIndex": r2},
+        "properties": {"pixelSize": px}, "fields": "pixelSize",
+    }}
+
+
+def _freeze(sheet_id, rows=1, cols=2):
+    return {"updateSheetProperties": {
+        "properties": {"sheetId": sheet_id,
+                       "gridProperties": {"frozenRowCount": rows, "frozenColumnCount": cols}},
+        "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"
+    }}
+
+
+def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True) -> int:
+    """
+    Full design for one training-plan tab.
+    - Deletes empty date columns
+    - Highlights today's column in green
+    - Applies consistent styling to headers, group rows, content rows
+    Returns number of empty columns deleted.
+    """
+    rows = _read_tab(service, tab_name)
+    if not rows:
+        return 0
+
+    header = rows[0]
+    today = date_cls.today()
+    today_str = f"{today.day}/{today.month}"
+
+    # ── Delete empty date columns ──────────────────────────────────────────────
+    deleted = 0
+    if delete_empty:
+        empty_cols = _find_empty_date_cols(rows, header)
+        if empty_cols:
+            _delete_columns(service, sheet_id, empty_cols)
+            deleted = len(empty_cols)
+            # Re-read after deletion
+            rows = _read_tab(service, tab_name)
+            if not rows:
+                return deleted
+            header = rows[0]
+
+    n_cols = max(len(r) for r in rows) if rows else 3
+    n_rows = len(rows)
+
+    # Find today's column index
+    today_col = None
+    for i, cell in enumerate(header):
+        parsed = _parse_date(cell)
+        if parsed and parsed == today:
+            today_col = i
+            break
+        # also match by string
+        if cell.strip() == today_str:
+            today_col = i
+            break
+
+    group_blocks = _find_group_rows(rows[1:])  # skip header
+    # Adjust indices: rows[1:] offset
+    group_blocks = [(g[0] + 1, g[1] + 1, g[2]) for g in group_blocks]
+
+    requests = []
+
+    # Freeze
+    requests.append(_freeze(sheet_id, rows=1, cols=2))
+
+    # Column widths
+    requests.append(_col_width(sheet_id, 0, 1, 95))   # שעה
+    requests.append(_col_width(sheet_id, 1, 2, 80))   # קבוצה
+    if n_cols > 2:
+        requests.append(_col_width(sheet_id, 2, n_cols, 120))
+
+    # Row heights
+    requests.append(_row_height(sheet_id, 0, n_rows, 34))
+
+    # ── Header row (row 0): שעה + קבוצה = navy, dates = light blue ────────────
+    requests.append(_repeat_cell(sheet_id, 0, 1, 0, 2, {
+        "backgroundColor": _NAVY,
+        "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": _WHITE},
+        "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        "wrapStrategy": "WRAP",
+    }))
+    for c in range(2, n_cols):
+        is_today = (today_col is not None and c == today_col)
+        bg = _TODAY_BG if is_today else _DATE_BG
+        txt_color = _WHITE if is_today else _BLACK
+        requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
+            "backgroundColor": bg,
+            "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": txt_color},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        }))
+
+    # ── Group blocks ───────────────────────────────────────────────────────────
+    for idx, (g_start, g_end, _) in enumerate(group_blocks):
+        g_color = _GROUP_A if idx % 2 == 0 else _GROUP_B
+
+        # Group header row
+        requests.append(_repeat_cell(sheet_id, g_start, g_start + 1, 0, n_cols, {
+            "backgroundColor": g_color,
+            "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        }))
+
+        # Content rows
+        for r in range(g_start + 1, g_end):
+            row_bg = _ROW_A if (r - g_start) % 2 == 0 else _ROW_B
+            # name cols (A, B) — center
+            requests.append(_repeat_cell(sheet_id, r, r + 1, 0, 2, {
+                "backgroundColor": row_bg,
+                "textFormat": {"fontSize": 10},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "WRAP",
+            }))
+            # date content cols
+            for c in range(2, n_cols):
+                is_today = (today_col is not None and c == today_col)
+                bg = _TODAY_CELL if is_today else row_bg
+                requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
+                    "backgroundColor": bg,
+                    "textFormat": {"fontSize": 10},
+                    "horizontalAlignment": "RIGHT", "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP",
+                }))
+
+    # ── Borders ────────────────────────────────────────────────────────────────
+    if n_rows > 0 and n_cols > 0:
+        requests.append(_border_range(sheet_id, 0, n_rows, 0, n_cols))
+
+    # Send in chunks
+    for i in range(0, len(requests), 400):
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": requests[i:i + 400]}
+        ).execute()
+
+    return deleted
+
+
+def design_all_tabs(delete_empty: bool = True) -> str:
+    """Design all training plan tabs. Returns summary string."""
+    service = _get_service()
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    tabs = [(s["properties"]["title"], s["properties"]["sheetId"]) for s in meta["sheets"]]
+
+    results = []
+    for tab_name, sid in tabs:
+        try:
+            deleted = design_tab(service, tab_name, sid, delete_empty)
+            msg = f"✅ {tab_name}"
+            if deleted:
+                msg += f" (נמחקו {deleted} עמודות ריקות)"
+            results.append(msg)
+        except Exception as e:
+            results.append(f"❌ {tab_name}: {e}")
+
+    return "\n".join(results)
+
+
+def _find_or_create_date_col(service, tab_name: str, plan_date) -> int:
     """Return 0-based column index for the given date, creating it if needed."""
     rows = _read_tab(service, tab_name)
     if not rows:
@@ -62,7 +326,6 @@ def _find_or_create_date_col(service, tab_name: str, plan_date: date) -> int:
     header = rows[0]
     date_str = f"{plan_date.day}/{plan_date.month}"
 
-    # Search for existing column
     for i, cell in enumerate(header):
         if cell.strip() == date_str:
             return i
@@ -78,50 +341,33 @@ def _find_or_create_date_col(service, tab_name: str, plan_date: date) -> int:
     return new_col
 
 
-def _col_letter(col_0: int) -> str:
-    """Convert 0-based column index to A, B, ... Z, AA, AB..."""
-    result = ""
-    col_0 += 1
-    while col_0 > 0:
-        col_0, remainder = divmod(col_0 - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
-
-
-def _find_group_rows(rows: list, group_keyword: str) -> list:
+def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
     """Return 0-based row indices that belong to a group block matching keyword."""
-    group_keyword = group_keyword.strip()
+    group_keyword = group_keyword.strip().replace("–", "-").replace("—", "-")
     block_start = None
     block_rows = []
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip():
-            # Start of a new group block
             if block_start is not None:
-                if _group_matches(rows[block_start][1], group_keyword):
+                cell = rows[block_start][1].strip().replace("–", "-").replace("—", "-")
+                if group_keyword in cell or cell in group_keyword:
                     return block_rows
             block_start = i
             block_rows = [i]
         elif block_start is not None:
             block_rows.append(i)
 
-    # Last block
-    if block_start is not None and _group_matches(rows[block_start][1], group_keyword):
-        return block_rows
-
+    if block_start is not None:
+        cell = rows[block_start][1].strip().replace("–", "-").replace("—", "-")
+        if group_keyword in cell or cell in group_keyword:
+            return block_rows
     return []
 
 
-def _group_matches(cell: str, keyword: str) -> bool:
-    cell = cell.strip().replace("–", "-").replace("—", "-")
-    keyword = keyword.strip().replace("–", "-").replace("—", "-")
-    return keyword in cell or cell in keyword
-
-
-def save_plan_to_sheet(branch: str, group: str, plan_date: date, plan_items: list[str]) -> str:
+def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]) -> str:
     """
     Write plan_items into the training plans sheet for the given branch/group/date.
-    plan_items: list of strings, one per row in the group block.
     Returns a summary string.
     """
     tab_name = BRANCH_TABS.get(branch)
@@ -134,16 +380,14 @@ def save_plan_to_sheet(branch: str, group: str, plan_date: date, plan_items: lis
     col_letter = _col_letter(col_0)
 
     rows = _read_tab(service, tab_name)
-    group_rows = _find_group_rows(rows, group)
+    group_rows = _find_group_rows_for_group(rows, group)
 
     if not group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
-    # Write items into the group rows (skip first row if it already has שעה)
     updates = []
     for i, item in enumerate(plan_items[:len(group_rows)]):
-        row_0 = group_rows[i]
-        row_1 = row_0 + 1
+        row_1 = group_rows[i] + 1
         updates.append({
             "range": f"'{tab_name}'!{col_letter}{row_1}",
             "values": [[item]]
@@ -155,20 +399,8 @@ def save_plan_to_sheet(branch: str, group: str, plan_date: date, plan_items: lis
             body={"valueInputOption": "RAW", "data": updates}
         ).execute()
 
-    # Style the new date column header
-    req = [{"repeatCell": {
-        "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
-                   "startColumnIndex": col_0, "endColumnIndex": col_0 + 1},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": _DATE_BG,
-            "textFormat": {"bold": True, "fontSize": 10},
-            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
-        }},
-        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
-    }}]
-    service.spreadsheets().batchUpdate(
-        spreadsheetId=SPREADSHEET_ID, body={"requests": req}
-    ).execute()
+    # Refresh design after save
+    design_tab(service, tab_name, sheet_id, delete_empty=False)
 
     date_str = f"{plan_date.day}/{plan_date.month}"
     return f"✅ נשמר בגיליון {tab_name} — {group} — {date_str} ({len(updates)} שורות)"
