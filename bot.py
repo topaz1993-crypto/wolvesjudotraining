@@ -493,8 +493,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.message.reply_text(
             "📝 שלח לי את הפרטים:\n"
-            "*שם הילד/ה, צבע חגורה, יום הטקס* (ואם יש — קישור לסרטון)\n\n"
-            "לדוגמה: `מתן, ירוקה, שישי, https://photos.app.goo.gl/...`",
+            "*שם, צבע חגורה, יום הטקס, סניף, קבוצה* (ואם יש — קישור לסרטון)\n\n"
+            "לדוגמה:\n`מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`\n"
+            "או בלי קישור:\n`רוני, כתומה, שני, סירקין, א-ב`",
             parse_mode="Markdown",
         )
         sheets_sessions[user_id] = {"step": "belt_msg_details"}
@@ -517,17 +518,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action.startswith("belt_add_cal"):
         await query.answer()
         parts = action.split("|")
-        child_name   = parts[1] if len(parts) > 1 else ""
-        belt_color   = parts[2] if len(parts) > 2 else ""
-        ceremony_day = parts[3] if len(parts) > 3 else ""
+        child_name    = parts[1] if len(parts) > 1 else ""
+        belt_color    = parts[2] if len(parts) > 2 else ""
+        ceremony_day  = parts[3] if len(parts) > 3 else ""
+        ceremony_time = parts[4] if len(parts) > 4 else ""
         sheets_sessions[user_id] = {
             "step": "belt_cal_date",
             "child_name": child_name,
             "belt_color": belt_color,
             "ceremony_day": ceremony_day,
+            "ceremony_time": ceremony_time,
         }
+        time_hint = f" (שעה: {ceremony_time})" if ceremony_time else ""
         await query.message.reply_text(
-            f"📅 מה התאריך המדויק של יום *{ceremony_day}*?\n(לדוגמה: `27/6` או `4/7`)",
+            f"📅 מה התאריך המדויק של יום *{ceremony_day}*{time_hint}?\n(לדוגמה: `27/6` או `4/7`)",
             parse_mode="Markdown"
         )
         return
@@ -1715,18 +1719,68 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # ── Belt ceremony message ────────────────────────────────────────────────────
     if step == 'belt_msg_details':
         sheets_sessions.pop(user_id, None)
-        # Parse: name, belt_color, day[, link]
+        # Parse: name, belt_color, day, branch, group[, link]
         parts = [p.strip() for p in text.replace("،", ",").split(",")]
         if len(parts) < 3:
             await update.message.reply_text(
-                "❌ פורמט: `שם, צבע, יום, קישור (אופציונלי)`\nלדוגמה: `מתן, ירוקה, שישי, https://...`",
+                "❌ פורמט: `שם, צבע, יום, סניף, קבוצה, קישור (אופציונלי)`",
                 parse_mode="Markdown")
             return True
 
         child_name   = parts[0]
         belt_color   = parts[1]
         ceremony_day = parts[2]
-        video_link   = parts[3] if len(parts) >= 4 else ""
+        branch       = parts[3] if len(parts) > 3 else ""
+        group        = parts[4] if len(parts) > 4 else ""
+        # link is last part if it starts with http
+        video_link   = ""
+        for p in parts[3:]:
+            if p.startswith("http"):
+                video_link = p
+                break
+
+        # Lookup training end time from schedule
+        SCHEDULE = {
+            # (branch_keyword, group_keyword, day) -> end_time HH:MM
+            ("חגור",    "ד",      "ראשון"): "16:30",
+            ("חגור",    "א",      "ראשון"): "17:15",
+            ("חגור",    "גנים",   "ראשון"): "18:00",
+            ("סירקין",  "ד",      "שני"):   "15:30",
+            ("סירקין",  "ג",      "שני"):   "16:30",
+            ("סירקין",  "א",      "שני"):   "17:15",
+            ("סירקין",  "בוגרים", "שני"):   "19:30",
+            ("סירקין",  "ז",      "שני"):   "19:30",
+            ("נווה ירק","גנים",   "שלישי"): "16:45",
+            ("נווה ירק","ג",      "שלישי"): "17:45",
+            ("נווה ירק","א",      "שלישי"): "18:30",
+            ("אהרונוביץ","א",     "רביעי"): "14:50",
+            ("אהרונוביץ","ג",     "רביעי"): "14:50",
+            ("סירקין",  "ז-ח",   "רביעי"): "17:15",
+            ("סירקין",  "ט",     "רביעי"): "18:15",
+            ("סירקין",  "ב-ד",   "רביעי"): "19:15",
+            ("סירקין",  "ה-ז",   "רביעי"): "20:00",
+            ("סירקין",  "ד",      "חמישי"): "15:30",
+            ("סירקין",  "ג",      "חמישי"): "16:30",
+            ("סירקין",  "א",      "חמישי"): "17:15",
+            ("סירקין",  "גנים",   "חמישי"): "18:00",
+            ("סירקין",  "בוגרים", "חמישי"): "19:30",
+            ("סירקין",  "ז",      "חמישי"): "19:30",
+            ("סירקין",  "נבחרת",  "שישי"):  "15:00",
+            ("גבעת",    "בוגרת",  "שישי"):  "17:45",
+        }
+
+        end_time = None
+        for (b_key, g_key, d_key), etime in SCHEDULE.items():
+            if b_key in branch and g_key in group and d_key in ceremony_day:
+                end_time = etime
+                break
+
+        # Compute ceremony time = 10 min before end
+        ceremony_time = None
+        if end_time:
+            h, m = map(int, end_time.split(":"))
+            total = h * 60 + m - 10
+            ceremony_time = f"{total // 60:02d}:{total % 60:02d}"
 
         payment_url = "https://private.invoice4u.co.il/Clearing/Invoice4UClearing.aspx?ProductId=4476&mobileApp=true"
         gender_suffix = "ה" if any(n in child_name for n in ["נועה","שירה","מיה","מאיה","רוני","ליאת","יעל","שרה","רחל","לאה","אורית","מורית","דנה","שני","ענת","לירן","הילה","ליה","ליאה","אביגיל","נגה","הדס","הדר","מרים","נעמי","עינב","טל","ניצן","כרמל","נורית","גלית","שפרה"]) else ""
@@ -1746,9 +1800,10 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{payment_url}"
         )
 
-        cal_data = f"belt_add_cal|{child_name}|{belt_color}|{ceremony_day}"
+        time_note = f" | 🕐 {ceremony_time}" if ceremony_time else ""
+        cal_data = f"belt_add_cal|{child_name}|{belt_color}|{ceremony_day}|{ceremony_time or ''}"
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 הוסף ליומן", callback_data=cal_data)],
+            [InlineKeyboardButton(f"📅 הוסף ליומן{time_note}", callback_data=cal_data)],
             [InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")],
         ])
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
@@ -1766,22 +1821,25 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         day, month = int(d_match.group(1)), int(d_match.group(2))
         event_date = date_cls(date_cls.today().year, month, day)
 
-        child_name   = ss.get("child_name", "")
-        belt_color   = ss.get("belt_color", "")
-        ceremony_day = ss.get("ceremony_day", "")
-        title        = f"טקס מעבר חגורה — {child_name} ({belt_color})"
+        child_name    = ss.get("child_name", "")
+        belt_color    = ss.get("belt_color", "")
+        ceremony_day  = ss.get("ceremony_day", "")
+        ceremony_time = ss.get("ceremony_time") or None
+        title         = f"טקס מעבר חגורה — {child_name} ({belt_color})"
 
         try:
-            link = cal.add_event(
+            cal.add_event(
                 calendar_name="טקסי מעבר חגורה",
                 title=title,
                 event_date=event_date,
-                description=f"טקס מעבר חגורה {belt_color} ל{child_name}. יתקיים ביום {ceremony_day} כ-10 דקות לפני סוף האימון.",
+                time_str=ceremony_time,
+                description=f"טקס מעבר חגורה {belt_color} ל{child_name}. כ-10 דקות לפני סוף האימון.",
             )
-            pending_belt_events.pop(user_id, None)
+            time_display = f" ב-{ceremony_time}" if ceremony_time else ""
             await update.message.reply_text(
                 f"✅ נוסף ליומן *טקסי מעבר חגורה*!\n"
-                f"📅 {title} — {event_date.strftime('%d/%m/%Y')}",
+                f"📅 {title}\n"
+                f"🗓 {event_date.strftime('%d/%m/%Y')}{time_display}",
                 parse_mode="Markdown"
             )
         except Exception as e:
