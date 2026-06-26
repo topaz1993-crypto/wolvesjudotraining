@@ -1165,12 +1165,29 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return True
             cs["date"] = event_date
             cs["time"] = time_str
-            cs["step"] = "wait_calendar"
-            await update.message.reply_text(
-                "📂 *באיזה יומן לשמור?*",
-                parse_mode="Markdown",
-                reply_markup=calendar_buttons(),
-            )
+
+            # Auto-detect calendar from title
+            title = cs.get("title", "").lower()
+            auto_cal = None
+            if any(k in title for k in ["חגורה", "טקס", "מעבר חגורה"]):
+                auto_cal = "טקסי מעבר חגורה"
+            elif any(k in title for k in ["נבחרת", "אימון", "אמון", "ג'ודו", "ג׳ודו", "מועדון"]):
+                auto_cal = "אימוני מועדון הג'ודו"
+            elif any(k in title for k in ["פגישה", "פגישות"]):
+                auto_cal = "פגישות"
+            elif any(k in title for k in ["תזכורת", "תזכיר"]):
+                auto_cal = "תזכורות"
+
+            if auto_cal:
+                cs["calendar"] = auto_cal
+                await _create_calendar_event(update.effective_chat.id, user_id, cs, context.bot)
+            else:
+                cs["step"] = "wait_calendar"
+                await update.message.reply_text(
+                    "📂 *באיזה יומן לשמור?*",
+                    parse_mode="Markdown",
+                    reply_markup=calendar_buttons(),
+                )
             return True
 
         return False
