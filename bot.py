@@ -123,6 +123,16 @@ def calendar_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def cancel_button() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")]])
+
+
+def with_cancel(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+    """Add cancel button to existing markup."""
+    rows = list(markup.inline_keyboard) + [[InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")]]
+    return InlineKeyboardMarkup(rows)
+
+
 def plan_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 שמור ישירות בגיליון", callback_data="save_direct")],
@@ -341,7 +351,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "שלח לי את הפרטים כדי שאכין הודעה ואוסיף ליומן:\n"
             "*שם, צבע חגורה, יום הטקס, סניף, קבוצה* (ואם יש — קישור לסרטון)\n\n"
             "לדוגמה: `מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
         )
         return
 
@@ -524,6 +535,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "לדוגמה:\n`מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`\n"
             "או בלי קישור:\n`רוני, כתומה, שני, סירקין, א-ב`",
             parse_mode="Markdown",
+            reply_markup=cancel_button()
         )
         sheets_sessions[user_id] = {"step": "belt_msg_details"}
         return
@@ -542,10 +554,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
         return
 
+    if action == "cancel_flow":
+        await query.answer("בוטל ✅")
+        sheets_sessions.pop(user_id, None)
+        calendar_sessions.pop(user_id, None)
+        pending_plans.pop(user_id, None)
+        await query.message.reply_text("בסדר, בוטל. במה אני יכול לעזור?")
+        return
+
     if action == "quick_cal":
         await query.answer()
         calendar_sessions[user_id] = {"step": "wait_title"}
-        await query.message.reply_text("✏️ *מה הכותרת של האירוע?*", parse_mode="Markdown")
+        await query.message.reply_text(
+            "✏️ *מה הכותרת של האירוע?*",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
         return
 
     if action.startswith("belt_add_cal"):
@@ -1199,6 +1223,7 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(
                 "📅 *מתי?*\nלדוגמה: `מחר`, `מחר ב10:00`, `25/6`, `ביום שישי ב18:00`",
                 parse_mode="Markdown",
+                reply_markup=cancel_button()
             )
             return True
 
@@ -1233,7 +1258,7 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await update.message.reply_text(
                     "📂 *באיזה יומן לשמור?*",
                     parse_mode="Markdown",
-                    reply_markup=calendar_buttons(),
+                    reply_markup=with_cancel(calendar_buttons()),
                 )
             return True
 
@@ -1268,7 +1293,7 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Always ask step by step — start with title
     calendar_sessions[user_id] = {"step": "wait_title"}
-    await update.message.reply_text("✏️ *מה הכותרת של המשימה?*", parse_mode="Markdown")
+    await update.message.reply_text("✏️ *מה הכותרת של המשימה?*", parse_mode="Markdown", reply_markup=cancel_button())
     return True
 
 
