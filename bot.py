@@ -356,6 +356,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # "בטל" → cancel all active sessions
+    if user_text in ("בטל", "ביטול", "cancel", "/cancel", "עצור", "חדש", "התחל מחדש"):
+        user_id_local = str(update.effective_user.id)
+        sheets_sessions.pop(user_id_local, None)
+        calendar_sessions.pop(user_id_local, None)
+        pending_plans.pop(user_id_local, None)
+        await update.message.reply_text(
+            "בסדר, מתחילים מחדש 👍\nבמה אפשר לעזור?",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 תפריט", callback_data="menu_main")]])
+        )
+        return
+
     # "תפריט" keyword → show main menu
     if user_text in ("תפריט", "menu", "/menu"):
         await show_main_menu(update)
