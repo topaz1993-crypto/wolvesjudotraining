@@ -123,6 +123,30 @@ def calendar_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+PLAN_GROUPS = {
+    "סירקין":    ["ד-ו", "ג", "א-ב", "גנים", "ז-בוגרים", "נבחרת", "איפון פייט ב-ד", "איפון פייט ה-ז"],
+    "חגור":      ["ד-ח", "א-ג", "גנים"],
+    "נווה ירק":  ["גנים", "ג-ז", "א-ב"],
+    "אהרונוביץ": ["א-ה"],
+    "פונקציונלי":["ז-ח", "ט-יב"],
+    "נבחרת":     ["נבחרת"],
+}
+
+def _plan_branch_markup() -> InlineKeyboardMarkup:
+    branches = ["סירקין", "חגור", "נווה ירק", "אהרונוביץ", "פונקציונלי", "נבחרת"]
+    rows = []
+    for i in range(0, len(branches), 2):
+        rows.append([InlineKeyboardButton(b, callback_data=f"pw_branch|{b}") for b in branches[i:i+2]])
+    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+    return InlineKeyboardMarkup(rows)
+
+def _plan_group_markup(branch: str) -> InlineKeyboardMarkup:
+    groups = PLAN_GROUPS.get(branch, [])
+    rows = [[InlineKeyboardButton(g, callback_data=f"pw_group|{g}")] for g in groups]
+    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+    return InlineKeyboardMarkup(rows)
+
+
 def cancel_button() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")]])
 
@@ -214,7 +238,10 @@ def main_menu_markup() -> InlineKeyboardMarkup:
 
         # ── אימון ──
         _hdr("─────  🥋 תוכנית אימון  ─────"),
-        [InlineKeyboardButton("🥋 בנה תוכנית אימון", callback_data="menu_plan")],
+        [
+            InlineKeyboardButton("🥋 בנה תוכנית", callback_data="menu_plan"),
+            InlineKeyboardButton("💾 שמור תוכנית", callback_data="menu_plan_save"),
+        ],
 
         # ── גיליונות ──
         _hdr("─────  📂 גיליונות  ─────"),
@@ -340,6 +367,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text.strip()
 
+    # Training plan detection — user sends plan directly
+    DIRECT_PLAN_KW = ("E2MOM", "E1MOM", "EMOM", "Bench Press", "Pull-Ups", "Box Jumps",
+                      "Rope Climb", "DB Lunge", "Deadlift", "Squat", "Clean")
+    if any(k.lower() in user_text.lower() for k in DIRECT_PLAN_KW) and not sheets_sessions.get(user_id):
+        user_id_local = str(update.effective_user.id)
+        pending_plans[user_id_local] = {"reply": user_text, "original": user_text}
+        save_json(PENDING_FILE, pending_plans)
+        await update.message.reply_text(
+            "💪 זיהיתי תוכנית אימון!\n\n*לשמור בגיליון?*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💾 כן, שמור בגיליון", callback_data="menu_plan_save")],
+                [InlineKeyboardButton("לא תודה", callback_data="cancel_flow")],
+            ])
+        )
+        return
+
     # Belt ceremony detection — any mention triggers calendar flow
     BELT_TRIGGERS = ("טקס חגורה", "טקס מעבר", "מעבר חגורה", "עבר חגורה", "עברה חגורה",
                      "עבר מבחן", "עברה מבחן", "עשה מבחן", "עשתה מבחן", "מבחן חגורה")
@@ -428,9 +472,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         csv_content = reply[csv_start:csv_end].strip()
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
-        # Don't show training plan buttons for belt/calendar/general responses
-        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום", "אימון:")
-        is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 3
+        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום", "EMOM", "E2MOM", "E1MOM")
+        is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 2
 
         if is_training_plan:
             pending_plans[user_id] = {"reply": reply, "original": user_text}
@@ -440,10 +483,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📅 הוסף ליומן", callback_data="quick_cal")]
         ])
 
+        save_plan_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💾 שמור בגיליון", callback_data="menu_plan_save"),
+             InlineKeyboardButton("📅 הוסף ליומן", callback_data="quick_cal")],
+        ])
+
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
             if i == len(chunks) - 1:
-                markup = plan_buttons() if is_training_plan else cal_markup
+                if is_training_plan:
+                    markup = save_plan_markup
+                else:
+                    markup = cal_markup
             else:
                 markup = None
             await update.message.reply_text(chunk, reply_markup=markup)
@@ -500,6 +551,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]),
         )
+        return
+
+    if action == "menu_plan_save":
+        await query.answer()
+        sheets_sessions[user_id] = {"step": "pw_branch"}
+        await query.message.reply_text(
+            "💾 *שמור תוכנית אימון בגיליון*\n\nאיזה סניף?",
+            parse_mode="Markdown",
+            reply_markup=_plan_branch_markup()
+        )
+        return
+
+    # ── Plan wizard — branch ──
+    if action.startswith("pw_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["branch"] = branch
+        ss["step"] = "pw_group"
+        sheets_sessions[user_id] = ss
+        await query.message.reply_text(
+            f"✅ {branch}\n\n👥 איזו קבוצה?",
+            reply_markup=_plan_group_markup(branch)
+        )
+        return
+
+    # ── Plan wizard — group ──
+    if action.startswith("pw_group|"):
+        await query.answer()
+        group = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["group"] = group
+        ss["step"] = "pw_date"
+        sheets_sessions[user_id] = ss
+        await query.message.reply_text(
+            f"✅ {group}\n\n📅 תאריך האימון? (לדוגמה: `26/6` או `היום`)",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
+        return
+
+    # ── Plan wizard — confirm save ──
+    if action == "pw_confirm":
+        await query.answer()
+        ss = sheets_sessions.pop(user_id, {})
+        await query.message.reply_text("⏳ שומר בגיליון...")
+        await _plan_wizard_save(query.message, user_id, ss)
+        return
+
+    if action == "pw_reedit":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        ss["step"] = "pw_edit"
+        sheets_sessions[user_id] = ss
+        await query.message.reply_text(
+            "✏️ שלח שוב את התוכנית בניסוח אחר:",
+            reply_markup=cancel_button()
+        )
+        return
+
+    if action == "pw_cancel_edit":
+        await query.answer()
+        sheets_sessions.pop(user_id, None)
+        await query.message.reply_text("בוטל.", reply_markup=cancel_button())
         return
 
     if action == "menu_design":
@@ -1439,6 +1554,99 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return True
 
 
+async def _plan_wizard_extract(branch: str, group: str, plan_text: str) -> list[str]:
+    """Use Claude to extract plan items in the correct format for the sheet."""
+    import anthropic as _anthropic
+    _client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    # Determine row labels by branch/group
+    if branch == "פונקציונלי":
+        row_labels = ["חימום", "תרגול א", "תרגול ב", "תרגול ג", "תרגול ד", "כוח", "הערות", "סיום"]
+    elif group in ("נבחרת", "ז-בוגרים", "ז-ח", "ט-יב"):
+        row_labels = ["חימום", "טכניקה", "תרגול", "קרבות א", "קרבות ב", "כוח", "הערות", "סיום"]
+    else:
+        row_labels = ["חימום", "תרגול א", "תרגול ב", "קרבות", "כוח", "הערות", "סיום", ""]
+
+    labels_str = " | ".join(f"{i+1}. {l}" for i, l in enumerate(row_labels))
+    prompt = f"""אתה עוזר לטופז מאמן ג'ודו. עליך לפרק תוכנית אימון לשורות הגיליון.
+
+הקבוצה: {branch} — {group}
+שורות הגיליון (בדיוק 8): {labels_str}
+
+תוכנית האימון:
+{plan_text}
+
+החזר בדיוק 8 שורות, אחת לכל תא. אם אין תוכן לשורה — כתוב רק מקף (-).
+ללא מספור, ללא כותרות — רק הטקסט לכל שורה.
+שמור על הסגנון של טופז: קצר, טכני, מדויק."""
+
+    resp = _client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=600,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    items = [l.strip() for l in resp.content[0].text.strip().splitlines() if l.strip()]
+    # Pad/trim to 8
+    while len(items) < 8:
+        items.append("")
+    return items[:8]
+
+
+async def _plan_wizard_preview(message, user_id: str, ss: dict):
+    """Show parsed plan preview with confirm/edit buttons."""
+    branch = ss.get("branch", "")
+    group  = ss.get("group", "")
+    plan_text = ss.get("plan_text", "")
+    plan_date_str = ss.get("plan_date", "")
+
+    try:
+        items = await _plan_wizard_extract(branch, group, plan_text)
+    except Exception as e:
+        await message.reply_text(f"❌ שגיאה בפירוק התוכנית: {e}")
+        return
+
+    ss["parsed_items"] = items
+    sheets_sessions[user_id] = ss
+
+    ROW_LABELS = ["חימום", "תרגול א", "תרגול ב", "שורה 4", "שורה 5", "כוח", "הערות", "סיום"]
+    preview = f"📋 *{branch} — {group}* | {plan_date_str}\n\n"
+    for i, (label, item) in enumerate(zip(ROW_LABELS, items)):
+        if item and item != "-":
+            preview += f"*{label}:* {item}\n"
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ אשר ושמור", callback_data="pw_confirm")],
+        [InlineKeyboardButton("✏️ שלח תוכנית מחדש", callback_data="pw_reedit")],
+        [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+    ])
+    await message.reply_text(preview, parse_mode="Markdown", reply_markup=markup)
+
+
+async def _plan_wizard_save(message, user_id: str, ss: dict):
+    """Save parsed items to the training plans sheet."""
+    from datetime import date as date_cls
+    branch    = ss.get("branch", "")
+    group     = ss.get("group", "")
+    items     = ss.get("parsed_items", [])
+    date_str  = ss.get("plan_date", "")
+
+    try:
+        plan_date = date_cls.fromisoformat(date_str)
+    except Exception:
+        plan_date = date_cls.today()
+
+    try:
+        result = tp.save_plan_to_sheet(branch, group, plan_date, items)
+        await message.reply_text(
+            f"✅ *נשמר בגיליון!*\n\n"
+            f"📊 {branch} — {group}\n"
+            f"📅 {plan_date.strftime('%d/%m/%Y')}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט", callback_data="menu_main")]]),
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ שגיאה בשמירה: {e}")
+
+
 async def _belt_wizard_finish(message, user_id: str):
     """Generate belt ceremony WhatsApp message and add to calendar."""
     import datetime as _dt
@@ -1976,6 +2184,53 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     step = ss.get('step')
 
     # ── Belt ceremony message ────────────────────────────────────────────────────
+    # ── Plan wizard — date input ──────────────────────────────────────────────────
+    if step == 'pw_date':
+        from datetime import date as date_cls
+        import re as _re
+        if "היום" in text:
+            plan_date = date_cls.today()
+        elif "מחר" in text:
+            from datetime import timedelta
+            plan_date = date_cls.today() + timedelta(days=1)
+        else:
+            dm = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+            if not dm:
+                await update.message.reply_text("❌ לא הבנתי תאריך. נסה: `26/6` או `היום`", parse_mode="Markdown")
+                return True
+            plan_date = date_cls(date_cls.today().year, int(dm.group(2)), int(dm.group(1)))
+        ss["plan_date"] = plan_date.isoformat()
+        ss["step"] = "pw_text"
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text(
+            f"✅ {plan_date.strftime('%d/%m/%Y')}\n\n"
+            "📋 *עכשיו שלח את תוכנית האימון:*\n"
+            "כתוב חופשי — הבוט יפרק אותה לפורמט הנכון",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
+        return True
+
+    # ── Plan wizard — plan text input ─────────────────────────────────────────────
+    if step == 'pw_text':
+        ss["plan_text"] = text
+        ss["step"] = "pw_preview"
+        sheets_sessions[user_id] = ss
+        branch = ss.get("branch", "")
+        group  = ss.get("group", "")
+        await update.message.reply_text("⏳ מפרק את התוכנית...")
+        await _plan_wizard_preview(update.message, user_id, ss)
+        return True
+
+    # ── Plan wizard — edit after preview ─────────────────────────────────────────
+    if step == 'pw_edit':
+        ss["plan_text"] = text
+        ss["step"] = "pw_preview"
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text("⏳ מעדכן...")
+        await _plan_wizard_preview(update.message, user_id, ss)
+        return True
+
     # ── Belt wizard — name input ──────────────────────────────────────────────────
     if step == 'belt_wizard_name':
         child_name = text.strip()
