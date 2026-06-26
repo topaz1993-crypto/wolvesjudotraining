@@ -412,13 +412,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_text = update.message.text.strip()
+    user_id = str(update.effective_user.id)
 
     # Training plan detection — user sends plan directly
     DIRECT_PLAN_KW = ("E2MOM", "E1MOM", "EMOM", "Bench Press", "Pull-Ups", "Box Jumps",
                       "Rope Climb", "DB Lunge", "Deadlift", "Squat", "Clean")
     if any(k.lower() in user_text.lower() for k in DIRECT_PLAN_KW) and not sheets_sessions.get(user_id):
-        user_id_local = str(update.effective_user.id)
-        pending_plans[user_id_local] = {"reply": user_text, "original": user_text}
+        pending_plans[user_id] = {"reply": user_text, "original": user_text}
         save_json(PENDING_FILE, pending_plans)
         await update.message.reply_text(
             "💪 זיהיתי תוכנית אימון!\n\n*לשמור בגיליון?*",
@@ -433,8 +433,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Belt ceremony detection — any mention triggers calendar flow
     BELT_TRIGGERS = ("טקס חגורה", "טקס מעבר", "מעבר חגורה", "עבר חגורה", "עברה חגורה",
                      "עבר מבחן", "עברה מבחן", "עשה מבחן", "עשתה מבחן", "מבחן חגורה")
-    if any(t in user_text for t in BELT_TRIGGERS) and "belt_msg" not in str(sheets_sessions.get(str(update.effective_user.id), {})):
-        user_id = str(update.effective_user.id)
+    if any(t in user_text for t in BELT_TRIGGERS) and "belt_msg" not in str(sheets_sessions.get(user_id, {})):
         sheets_sessions[user_id] = {"step": "belt_msg_details"}
         await update.message.reply_text(
             "🎌 נראה שמדובר בטקס חגורה!\n\n"
@@ -470,9 +469,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if any(t in user_text for t in ("לילה יפני", "לילה")):
         await lyla_command(update, context)
         return
-
-    user_id = str(update.effective_user.id)
-    user_text = update.message.text
 
     # Detect if user pasted a ready-made belt ceremony message back to the bot
     if "אני שמח לעדכן" in user_text and "חגורה" in user_text and "טקס מעבר חגורה" in user_text:
