@@ -346,6 +346,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_text = update.message.text
 
+    # Detect if user pasted a ready-made belt ceremony message back to the bot
+    if "אני שמח לעדכן" in user_text and "חגורה" in user_text and "טקס מעבר חגורה" in user_text:
+        await update.message.reply_text(
+            "✅ ההודעה נראית מוכנה!\n\n"
+            "📋 פשוט *העתק* אותה ושלח ישירות לקבוצת הוואטסאפ של ההורים.\n\n"
+            "אם רוצה להוסיף את הטקס ליומן גוגל — חזור לתפריט ← 🥇 חגורות ← 📝 הודעה להורה ← 📅 הוסף ליומן.",
+            parse_mode="Markdown"
+        )
+        return
+
     extra_context = ""
     for branch in ["חגור", "סירקין", "נווה ירק", "אהרונוביץ", "איפון פייט", "פונקציונלי", "נבחרת"]:
         if branch in user_text:
