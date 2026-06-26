@@ -330,6 +330,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text.strip()
 
+    # Belt ceremony detection — any mention triggers calendar flow
+    BELT_TRIGGERS = ("טקס חגורה", "טקס מעבר", "מעבר חגורה", "עבר חגורה", "עברה חגורה",
+                     "עבר מבחן", "עברה מבחן", "עשה מבחן", "עשתה מבחן", "מבחן חגורה")
+    if any(t in user_text for t in BELT_TRIGGERS) and "belt_msg" not in str(sheets_sessions.get(str(update.effective_user.id), {})):
+        user_id = str(update.effective_user.id)
+        sheets_sessions[user_id] = {"step": "belt_msg_details"}
+        await update.message.reply_text(
+            "🎌 נראה שמדובר בטקס חגורה!\n\n"
+            "שלח לי את הפרטים כדי שאכין הודעה ואוסיף ליומן:\n"
+            "*שם, צבע חגורה, יום הטקס, סניף, קבוצה* (ואם יש — קישור לסרטון)\n\n"
+            "לדוגמה: `מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`",
+            parse_mode="Markdown"
+        )
+        return
+
     # "תפריט" keyword → show main menu
     if user_text in ("תפריט", "menu", "/menu"):
         await show_main_menu(update)
