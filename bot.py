@@ -58,6 +58,8 @@ pending_plans: dict[str, str] = load_json(PENDING_FILE, {})
 attendance_sessions: dict[str, dict] = {}
 # sheets_sessions[user_id] = active camp/lyla flow session
 sheets_sessions: dict[str, dict] = {}
+# pending_belt_events[user_id] = {child_name, belt_color, ceremony_day}
+pending_belt_events: dict[str, dict] = {}
 # new_student_sessions[user_id] = {"session": ..., "step": "first_name"|"last_name", "first_name": "..."}
 new_student_sessions: dict[str, dict] = {}
 # calendar_sessions[user_id] = {"step": "pick_cal"|"pick_date"|"pick_title", "calendar": ..., "date": ..., "title": ...}
@@ -479,16 +481,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_belt_msg":
         await query.answer()
-        msg = (
-            "📝 *הודעה להורה אחרי מבחן חגורה:*\n\n"
-            "היי, אני שמח לעדכן שהילד/ה עשה/ה מבחן לחגורה *\\[צבע\\]* ועבר/ה בהצלחה\\! 🥳\n"
-            "ביום *\\[יום\\]* נקיים טקס מעבר חגורה כ\\-10 דקות לקראת סוף האימון\\.\n"
-            "אתם מוזמנים להגיע, לצלם ולהביא כיבוד בריא \\- *לא חובה*\n"
-            "עלות חגורה ותעודה \\- 60 ₪\n"
-            "https://private\\.invoice4u\\.co\\.il/Clearing/Invoice4UClearing\\.aspx?ProductId=4476&mobileApp=true"
+        await query.message.reply_text(
+            "📝 שלח לי את הפרטים:\n"
+            "*שם הילד/ה, צבע חגורה, יום הטקס* (ואם יש — קישור לסרטון)\n\n"
+            "לדוגמה: `מתן, ירוקה, שישי, https://photos.app.goo.gl/...`",
+            parse_mode="Markdown",
         )
-        await query.edit_message_text(msg, parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
+        sheets_sessions[user_id] = {"step": "belt_msg_details"}
         return
 
     if action == "menu_belt_pay":
@@ -505,6 +504,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🌐 פורטל הכנה למבחני חגורה:\nhttps://wolvesjudotest\\.netlify\\.app/",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
+        return
+
+    if action == "belt_add_cal":
+        await query.answer()
+        ev = pending_belt_events.get(user_id)
+        if not ev:
+            await query.message.reply_text("❌ לא נמצא אירוע להוסיף. הכן שוב הודעת חגורה.")
+            return
+        sheets_sessions[user_id] = {"step": "belt_cal_date", **ev}
+        await query.message.reply_text(
+            f"📅 מה התאריך המדויק של יום *{ev['ceremony_day']}*?\n(לדוגמה: `27/6` או `4/7`)",
+            parse_mode="Markdown"
+        )
         return
 
     if action == "menu_camp":
@@ -1669,6 +1681,88 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Belt ceremony message ────────────────────────────────────────────────────
+    if step == 'belt_msg_details':
+        sheets_sessions.pop(user_id, None)
+        # Parse: name, belt_color, day[, link]
+        parts = [p.strip() for p in text.replace("،", ",").split(",")]
+        if len(parts) < 3:
+            await update.message.reply_text(
+                "❌ פורמט: `שם, צבע, יום, קישור (אופציונלי)`\nלדוגמה: `מתן, ירוקה, שישי, https://...`",
+                parse_mode="Markdown")
+            return True
+
+        child_name   = parts[0]
+        belt_color   = parts[1]
+        ceremony_day = parts[2]
+        video_link   = parts[3] if len(parts) >= 4 else ""
+
+        payment_url = "https://private.invoice4u.co.il/Clearing/Invoice4UClearing.aspx?ProductId=4476&mobileApp=true"
+        gender_suffix = "ה" if any(n in child_name for n in ["נועה","שירה","מיה","מאיה","רוני","ליאת","יעל","שרה","רחל","לאה","אורית","מורית","דנה","שני","ענת","לירן","הילה","ליה","ליאה","אביגיל","נגה","הדס","הדר","מרים","נעמי","עינב","טל","ניצן","כרמל","נורית","גלית","שפרה"]) else ""
+        suffix_verb = "עשתה" if gender_suffix else "עשה"
+        suffix_pass = "עברה" if gender_suffix else "עבר"
+
+        video_part = f"\n*מצורף סרטון למבחן*\n{video_link}" if video_link else ""
+
+        msg = (
+            f"היי,\n"
+            f"אני שמח לעדכן ש{child_name} {suffix_verb} מבחן לחגורה {belt_color} ו{suffix_pass} בהצלחה! 🥳\n\n"
+            f"ביום *{ceremony_day}* נקיים טקס מעבר חגורה כ-10 דקות לקראת סוף האימון.\n"
+            f"אתם מוזמנים להגיע, לצלם ולהביא כיבוד בריא (פירות, ירקות וכו׳). *לא חובה*"
+            f"{video_part}\n\n"
+            f"*עלות חגורה ותעודה - 60 ₪*\n"
+            f"*ניתן לרכוש חגורה באמצעות הקישור או להתארגן באופן עצמאי.*\n"
+            f"{payment_url}"
+        )
+
+        # Store for calendar use
+        pending_belt_events[user_id] = {
+            "child_name": child_name,
+            "belt_color": belt_color,
+            "ceremony_day": ceremony_day,
+        }
+
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 הוסף ליומן", callback_data="belt_add_cal")],
+            [InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")],
+        ])
+        await update.message.reply_text(msg, reply_markup=markup)
+        return True
+
+    # ── Belt calendar event ───────────────────────────────────────────────────────
+    if step == 'belt_cal_date':
+        sheets_sessions.pop(user_id, None)
+        import re as _re
+        from datetime import date as date_cls
+        d_match = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        if not d_match:
+            await update.message.reply_text("❌ לא הבנתי תאריך. נסה: `27/6`", parse_mode="Markdown")
+            return True
+        day, month = int(d_match.group(1)), int(d_match.group(2))
+        event_date = date_cls(date_cls.today().year, month, day)
+
+        child_name   = ss.get("child_name", "")
+        belt_color   = ss.get("belt_color", "")
+        ceremony_day = ss.get("ceremony_day", "")
+        title        = f"טקס מעבר חגורה — {child_name} ({belt_color})"
+
+        try:
+            link = cal.add_event(
+                calendar_name="טקסי מעבר חגורה",
+                title=title,
+                event_date=event_date,
+                description=f"טקס מעבר חגורה {belt_color} ל{child_name}. יתקיים ביום {ceremony_day} כ-10 דקות לפני סוף האימון.",
+            )
+            pending_belt_events.pop(user_id, None)
+            await update.message.reply_text(
+                f"✅ נוסף ליומן *טקסי מעבר חגורה*!\n"
+                f"📅 {title} — {event_date.strftime('%d/%m/%Y')}",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה בהוספה ליומן: {e}")
+        return True
 
     # ── Save direct from original text ──────────────────────────────────────────
     if step == 'save_direct_date':
