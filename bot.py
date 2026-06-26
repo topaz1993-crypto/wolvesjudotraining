@@ -35,9 +35,32 @@ client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 SYSTEM_PROMPT = open("system_prompt.txt", encoding="utf-8").read()
 
-HISTORY_FILE = Path("conversation_history.json")
-LOG_FILE = Path("training_log.json")
-PENDING_FILE = Path("pending_plans.json")
+# Use /data if available (Render persistent disk — survives deploys), else local
+_DATA_DIR = Path("/data") if Path("/data").exists() else Path(".")
+HISTORY_FILE     = _DATA_DIR / "conversation_history.json"
+LOG_FILE         = _DATA_DIR / "training_log.json"
+PENDING_FILE     = _DATA_DIR / "pending_plans.json"
+CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
+
+
+def load_corrections() -> str:
+    if CORRECTIONS_FILE.exists():
+        return CORRECTIONS_FILE.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def append_correction(correction: str):
+    from datetime import date
+    line = f"[{date.today().isoformat()}] {correction}\n"
+    with open(CORRECTIONS_FILE, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def build_system_prompt() -> str:
+    corrections = load_corrections()
+    if not corrections:
+        return SYSTEM_PROMPT
+    return SYSTEM_PROMPT + "\n\n---\n## תיקונים ולמידה מהשטח (עודכן אוטומטית)\n" + corrections
 
 
 def load_json(path: Path, default):
@@ -184,13 +207,36 @@ async def send_long(update: Update, text: str, reply_markup=None):
         await update.message.reply_text(chunk, reply_markup=markup)
 
 
-async def call_claude(user_id: str, user_content: str) -> str:
-    append_history(user_id, "user", user_content)
+CORRECTION_TRIGGERS = ("לא זה", "לא נכון", "תיקון:", "שגוי", "טעית", "תיקן:", "זה לא מה ש",
+                       "לא רציתי", "לא ביקשתי", "לא כך", "לא ככה", "תשנה", "תתקן")
+
+async def call_claude(user_id: str, user_content: str, image_b64: str | None = None) -> str:
+    # Detect corrections and save them
+    if any(t in user_content for t in CORRECTION_TRIGGERS):
+        hist = get_history(user_id)
+        last_bot = next((m["content"] for m in reversed(hist) if m["role"] == "assistant"), "")
+        correction_entry = f"המשתמש תיקן: '{user_content[:120]}' — תשובת הבוט הקודמת הייתה: '{last_bot[:120]}'"
+        append_correction(correction_entry)
+
+    if image_b64:
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+            {"type": "text", "text": user_content or "מה יש בתמונה? תסביר בהקשר של ג'ודו / ניהול מועדון."},
+        ]
+        append_history(user_id, "user", f"[תמונה] {user_content}")
+    else:
+        content = user_content
+        append_history(user_id, "user", user_content)
+
+    msgs = get_history(user_id)[:-1] if image_b64 else get_history(user_id)
+    if image_b64:
+        msgs = get_history(user_id)[:-1] + [{"role": "user", "content": content}]
+
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=get_history(user_id),
+        system=build_system_prompt(),
+        messages=msgs,
     )
     reply = response.content[0].text
     append_history(user_id, "assistant", reply)
@@ -1554,6 +1600,22 @@ async def handle_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return True
 
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process photos sent to the bot — forward to Claude vision."""
+    import base64
+    user_id = str(update.effective_user.id)
+    photo = update.message.photo[-1]  # largest size
+    caption = update.message.caption or ""
+
+    await update.message.reply_text("📸 מעבד את התמונה...")
+    file = await context.bot.get_file(photo.file_id)
+    data = await file.download_as_bytearray()
+    image_b64 = base64.b64encode(bytes(data)).decode()
+
+    reply = await call_claude(user_id, caption, image_b64=image_b64)
+    await update.message.reply_text(reply)
+
+
 async def _plan_wizard_extract(branch: str, group: str, plan_text: str) -> list[str]:
     """Use Claude to extract plan items in the correct format for the sheet."""
     import anthropic as _anthropic
@@ -1755,6 +1817,28 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json(HISTORY_FILE, history)
     save_json(PENDING_FILE, pending_plans)
     await update.message.reply_text("🔄 שיחה אופסה.")
+
+
+async def correction_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/תיקון <טקסט> — מלמד את הבוט תיקון לעתיד."""
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        await update.message.reply_text(
+            "שלח תיקון כך:\n`/תיקון כשאני אומר X הבוט צריך לעשות Y`",
+            parse_mode="Markdown"
+        )
+        return
+    append_correction(f"[תיקון ידני] {text}")
+    await update.message.reply_text(f"✅ נשמר! הבוט יזכור:\n_{text}_", parse_mode="Markdown")
+
+
+async def show_corrections_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/תיקונים — הצג את כל התיקונים השמורים."""
+    c = load_corrections()
+    if not c:
+        await update.message.reply_text("אין תיקונים שמורים עדיין.")
+        return
+    await update.message.reply_text(f"📝 *תיקונים שמורים:*\n\n{c}", parse_mode="Markdown")
 
 
 async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2800,8 +2884,11 @@ def main():
     app.add_handler(CommandHandler("tomorrow", tomorrow_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("month", month_command))
+    app.add_handler(CommandHandler("תיקון", correction_command))
+    app.add_handler(CommandHandler("תיקונים", show_corrections_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     log.info("Bot started...")
     app.run_polling()
 
