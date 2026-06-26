@@ -413,9 +413,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_plans[user_id] = {"reply": reply, "original": user_text}
             save_json(PENDING_FILE, pending_plans)
 
+        cal_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 הוסף ליומן", callback_data="quick_cal")]
+        ])
+
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
-            markup = plan_buttons() if (is_training_plan and i == len(chunks) - 1) else None
+            if i == len(chunks) - 1:
+                markup = plan_buttons() if is_training_plan else cal_markup
+            else:
+                markup = None
             await update.message.reply_text(chunk, reply_markup=markup)
 
 
@@ -533,6 +540,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             "🌐 פורטל הכנה למבחני חגורה:\nhttps://wolvesjudotest.netlify.app/",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
+        return
+
+    if action == "quick_cal":
+        await query.answer()
+        calendar_sessions[user_id] = {"step": "wait_title"}
+        await query.message.reply_text("✏️ *מה הכותרת של האירוע?*", parse_mode="Markdown")
         return
 
     if action.startswith("belt_add_cal"):
