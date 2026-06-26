@@ -498,8 +498,12 @@ def mark_attendance(session: dict, absent_indices: set[int]):
         body={"requests": requests}
     ).execute()
 
-    # Re-sync blue on name columns after every save
-    _recolor_name_cols(service, spreadsheet_id, session["sheet_name"], sheet_id)
+    # Full design refresh: headers, column widths, borders, blue rows
+    try:
+        apply_sheet_design(session["branch"], session["sheet_name"])
+    except Exception:
+        # Fallback: at least re-sync name column colors
+        _recolor_name_cols(service, spreadsheet_id, session["sheet_name"], sheet_id)
 
 
 def add_new_student(session: dict, first_name: str, last_name: str) -> tuple[int, str]:
@@ -834,13 +838,13 @@ def apply_sheet_design(branch: str, group: str):
     students = get_students(service, spreadsheet_id, group)
     last_student_row = students[-1][0] if students else student_start_0 + 10
 
-    # Find last used column
+    # Find last used column + reserve 20 extra for future dates
     result = service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=f"{group}!{header_row_0 + 1}:{header_row_0 + 1}"
     ).execute()
     header_row_vals = result.get("values", [[]])[0]
-    last_col = max(len(header_row_vals), first_att_col_0 + 1)
+    last_col = max(len(header_row_vals), first_att_col_0 + 1) + 20
 
     req = []
 
