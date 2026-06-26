@@ -123,6 +123,7 @@ def calendar_buttons() -> InlineKeyboardMarkup:
 
 def plan_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 שמור ישירות בגיליון", callback_data="save_direct")],
         [
             InlineKeyboardButton("✅ אשר וייצר CSV", callback_data="approve"),
             InlineKeyboardButton("✏️ שנה משהו", callback_data="edit"),
@@ -377,8 +378,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         csv_content = reply[csv_start:csv_end].strip()
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
-        # store as pending and show approval buttons
-        pending_plans[user_id] = reply
+        # store original user text + Claude reply for direct save
+        pending_plans[user_id] = {"reply": reply, "original": user_text}
         save_json(PENDING_FILE, pending_plans)
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
@@ -632,6 +633,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Sheets (camp / lyla) callbacks
+    if action == "save_direct":
+        await query.answer()
+        plan_data = pending_plans.get(user_id, {})
+        original = plan_data.get("original", "") if isinstance(plan_data, dict) else str(plan_data)
+        sheets_sessions[user_id] = {"step": "save_direct_date", "original": original}
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="📅 *לאיזה תאריך לשמור?*\n(לדוגמה: `היום`, `26/6`, `מחר`)",
+            parse_mode="Markdown",
+        )
+        return
+
     if action.startswith("camp_") or action.startswith("lyla_"):
         await handle_sheets_callback(query, user_id, action, context)
         return
@@ -1656,6 +1669,60 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Save direct from original text ──────────────────────────────────────────
+    if step == 'save_direct_date':
+        from datetime import date as date_cls
+        import re as _re
+        d_match = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        if "היום" in text:
+            plan_date = date_cls.today()
+        elif "מחר" in text:
+            from datetime import timedelta
+            plan_date = date_cls.today() + timedelta(days=1)
+        elif d_match:
+            plan_date = date_cls(date_cls.today().year, int(d_match.group(2)), int(d_match.group(1)))
+        else:
+            await update.message.reply_text("❌ לא הבנתי תאריך. נסה: `26/6` או `היום`", parse_mode="Markdown")
+            return True
+
+        original = ss.get("original", "")
+        await update.message.reply_text("⏳ שומר בגיליון...")
+
+        # Ask Claude to extract structured plan items for the sheet
+        import anthropic as _anthropic
+        _client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        extract_prompt = f"""המשתמש שלח תוכנית אימון לגיליון תוכניות האימון.
+הגיליון מחולק לשורות: חימום, תרגול א, תרגול ב, קרבות א, קרבות ב, כוח, הערות, סיום.
+החזר רשימה של בדיוק 8 פריטים (שורה אחת לכל תא בגיליון), מופרדים בשורות.
+ללא מספור, ללא כותרות, רק הטקסט של כל שורה. אם אין תוכן לשורה — כתוב -.
+
+הטקסט:
+{original}"""
+        resp = _client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=512,
+            messages=[{"role": "user", "content": extract_prompt}]
+        )
+        items_text = resp.content[0].text.strip()
+        plan_items = [line.strip() for line in items_text.splitlines() if line.strip()]
+        plan_items = [i if i != "-" else "" for i in plan_items]
+
+        # Detect branch from original text
+        branch = "נבחרת"
+        group = "נבחרת"
+        for b in ["סירקין", "חגור", "נווה ירק", "אהרונוביץ", "פונקציונלי", "נבחרת", "איפון פייט"]:
+            if b in original:
+                branch = b
+                group = b
+                break
+
+        try:
+            result = tp.save_plan_to_sheet(branch, group, plan_date, plan_items)
+            await update.message.reply_text(result)
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה: {e}")
+        sheets_sessions.pop(user_id, None)
+        return True
 
     # ── Save plan to sheet flow ──
     if step == 'save_plan_date':
