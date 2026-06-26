@@ -925,6 +925,18 @@ def apply_sheet_design(branch: str, group: str):
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
         }})
 
+    # ── Clear gap rows between header and first student (e.g. row 3 in א-ב) ────
+    if student_start_0 > header_row_0 + 1:
+        req.append({"repeatCell": {
+            "range": {"sheetId": sheet_id,
+                       "startRowIndex": header_row_0 + 1, "endRowIndex": student_start_0,
+                       "startColumnIndex": 0, "endColumnIndex": last_col},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": _WHITE,
+            }},
+            "fields": "userEnteredFormat.backgroundColor",
+        }})
+
     # ── Student rows: alternating blue on name columns (A-C) ─────────────────
     for i, (row, _) in enumerate(students):
         bg = _ROW_A if i % 2 == 0 else _ROW_B
