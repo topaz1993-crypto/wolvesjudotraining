@@ -26,9 +26,9 @@ ALL_TABS = list(BRANCH_TABS.values())
 # ── Color palette ──────────────────────────────────────────────────────────────
 _NAVY       = {"red": 0.13, "green": 0.19, "blue": 0.36}
 _WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
-_DATE_BG    = {"red": 0.82, "green": 0.87, "blue": 0.95}   # normal date header
-_TODAY_BG   = {"red": 0.20, "green": 0.66, "blue": 0.32}   # today's column header (green)
-_TODAY_CELL = {"red": 0.90, "green": 1.00, "blue": 0.90}   # today's column content cells
+_DATE_BG    = {"red": 0.82, "green": 0.87, "blue": 0.95}   # past date header
+_LAST_HDR   = {"red": 0.98, "green": 0.60, "blue": 0.12}   # latest plan header (orange)
+_LAST_CELL  = {"red": 1.00, "green": 0.95, "blue": 0.80}   # latest plan content cells
 _GROUP_A    = {"red": 0.18, "green": 0.39, "blue": 0.60}   # group header shade 1
 _GROUP_B    = {"red": 0.24, "green": 0.48, "blue": 0.68}   # group header shade 2
 _ROW_A      = {"red": 0.95, "green": 0.97, "blue": 1.00}
@@ -203,16 +203,11 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     n_cols = max(len(r) for r in rows) if rows else 3
     n_rows = len(rows)
 
-    # Find today's column index
-    today_col = None
-    for i, cell in enumerate(header):
-        parsed = _parse_date(cell)
-        if parsed and parsed == today:
-            today_col = i
-            break
-        # also match by string
-        if cell.strip() == today_str:
-            today_col = i
+    # ── Find last column that has ANY content in body rows ─────────────────────
+    last_filled_col = None
+    for c in range(n_cols - 1, 1, -1):
+        if any(c < len(row) and row[c].strip() for row in rows[1:]):
+            last_filled_col = c
             break
 
     group_blocks = _find_group_rows(rows[1:])  # skip header
@@ -229,11 +224,14 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     requests.append(_col_width(sheet_id, 1, 2, 80))   # קבוצה
     if n_cols > 2:
         requests.append(_col_width(sheet_id, 2, n_cols, 120))
+    # Make last filled column slightly wider so it stands out
+    if last_filled_col:
+        requests.append(_col_width(sheet_id, last_filled_col, last_filled_col + 1, 140))
 
     # Row heights
     requests.append(_row_height(sheet_id, 0, n_rows, 34))
 
-    # ── Header row (row 0): שעה + קבוצה = navy, dates = light blue ────────────
+    # ── Header row (row 0): שעה + קבוצה = navy, dates = blue, last = orange ────
     requests.append(_repeat_cell(sheet_id, 0, 1, 0, 2, {
         "backgroundColor": _NAVY,
         "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": _WHITE},
@@ -241,12 +239,13 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
         "wrapStrategy": "WRAP",
     }))
     for c in range(2, n_cols):
-        is_today = (today_col is not None and c == today_col)
-        bg = _TODAY_BG if is_today else _DATE_BG
-        txt_color = _WHITE if is_today else _BLACK
+        is_last = (last_filled_col is not None and c == last_filled_col)
+        bg = _LAST_HDR if is_last else _DATE_BG
+        txt_color = _WHITE if is_last else _BLACK
+        fsize = 11 if is_last else 10
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
-            "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": txt_color},
+            "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt_color},
             "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
             "wrapStrategy": "WRAP",
         }))
@@ -275,11 +274,12 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
             }))
             # date content cols
             for c in range(2, n_cols):
-                is_today = (today_col is not None and c == today_col)
-                bg = _TODAY_CELL if is_today else row_bg
+                is_last = (last_filled_col is not None and c == last_filled_col)
+                bg = _LAST_CELL if is_last else row_bg
+                bold = is_last
                 requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
                     "backgroundColor": bg,
-                    "textFormat": {"fontSize": 10},
+                    "textFormat": {"fontSize": 10, "bold": bold},
                     "horizontalAlignment": "RIGHT", "verticalAlignment": "MIDDLE",
                     "wrapStrategy": "WRAP",
                 }))
@@ -300,6 +300,7 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
 
 def design_all_tabs(delete_empty: bool = True) -> str:
     """Design all training plan tabs. Returns summary string."""
+    import time
     service = _get_service()
     meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     tabs = [(s["properties"]["title"], s["properties"]["sheetId"]) for s in meta["sheets"]]
@@ -314,6 +315,7 @@ def design_all_tabs(delete_empty: bool = True) -> str:
             results.append(msg)
         except Exception as e:
             results.append(f"❌ {tab_name}: {e}")
+        time.sleep(1.5)  # avoid quota exceeded
 
     return "\n".join(results)
 
