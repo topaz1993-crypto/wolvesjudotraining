@@ -320,6 +320,12 @@ def design_all_tabs(delete_empty: bool = True) -> str:
     return "\n".join(results)
 
 
+_ORANGE   = {"red": 0.976, "green": 0.600, "blue": 0.118}  # #f9991e — כותרת תאריך חדש
+_CREAM    = {"red": 1.0,   "green": 0.949, "blue": 0.800}  # #fff2cc — שורות תוכן
+_WHITE_FG = {"red": 1.0,   "green": 1.0,   "blue": 1.0}
+_BLACK_FG = {"red": 0.0,   "green": 0.0,   "blue": 0.0}
+
+
 def _find_or_create_date_col(service, tab_name: str, plan_date) -> int:
     """Return 0-based column index for the given date, creating it if needed."""
     rows = _read_tab(service, tab_name)
@@ -334,12 +340,47 @@ def _find_or_create_date_col(service, tab_name: str, plan_date) -> int:
 
     # Add new column at end
     new_col = max(len(header), 2)
+    col_letter = _col_letter(new_col)
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"'{tab_name}'!{_col_letter(new_col)}1",
+        range=f"'{tab_name}'!{col_letter}1",
         valueInputOption="RAW",
         body={"values": [[date_str]]}
     ).execute()
+
+    # Apply formatting: orange header + cream content rows
+    sheet_id = _get_sheet_id(service, tab_name)
+    n_rows = len(rows) + 1
+    requests = [
+        # כותרת תאריך — כתום, לבן, bold, 11
+        {"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": new_col, "endColumnIndex": new_col + 1},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": _ORANGE,
+                "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": _WHITE_FG},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+        }},
+        # שורות תוכן — צהוב-שמנת, שחור, bold
+        {"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": n_rows,
+                      "startColumnIndex": new_col, "endColumnIndex": new_col + 1},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": _CREAM,
+                "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _BLACK_FG},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "WRAP",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
+        }},
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": requests}
+    ).execute()
+
     return new_col
 
 
