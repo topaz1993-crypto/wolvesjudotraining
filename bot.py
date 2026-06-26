@@ -476,7 +476,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_belts":
         await query.answer()
-        await query.edit_message_text("🥇 חגורות — בחר פעולה:", reply_markup=belts_menu_markup())
+        await query.message.reply_text("🥇 חגורות — בחר פעולה:", reply_markup=belts_menu_markup())
         return
 
     if action == "menu_belt_msg":
@@ -492,17 +492,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_belt_pay":
         await query.answer()
-        await query.edit_message_text(
-            "💳 לינק תשלום חגורה \\(60 ₪\\):\nhttps://private\\.invoice4u\\.co\\.il/Clearing/Invoice4UClearing\\.aspx?ProductId=4476&mobileApp=true",
-            parse_mode="MarkdownV2",
+        await query.message.reply_text(
+            "💳 לינק תשלום חגורה (60 ₪):\nhttps://private.invoice4u.co.il/Clearing/Invoice4UClearing.aspx?ProductId=4476&mobileApp=true",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
         return
 
     if action == "menu_belt_portal":
         await query.answer()
-        await query.edit_message_text(
-            "🌐 פורטל הכנה למבחני חגורה:\nhttps://wolvesjudotest\\.netlify\\.app/",
-            parse_mode="MarkdownV2",
+        await query.message.reply_text(
+            "🌐 פורטל הכנה למבחני חגורה:\nhttps://wolvesjudotest.netlify.app/",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_belts")]]))
         return
 
