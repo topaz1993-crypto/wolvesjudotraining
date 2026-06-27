@@ -29,7 +29,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
+GMAIL_USER        = os.environ.get("GMAIL_USER", "topazjudo@gmail.com")
+GMAIL_APP_PASS    = os.environ.get("GMAIL_APP_PASS", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -1705,6 +1707,105 @@ async def _plan_wizard_save(message, user_id: str, ss: dict):
         await message.reply_text(f"❌ שגיאה בשמירה: {e}")
 
 
+# ── Gmail helpers ─────────────────────────────────────────────────────────────
+
+def gmail_send(to: str, subject: str, body: str, attachments: list[str] | None = None):
+    """Send email via Gmail SMTP using App Password."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    if not GMAIL_APP_PASS:
+        raise ValueError("GMAIL_APP_PASS לא מוגדר")
+
+    msg = MIMEMultipart()
+    msg["From"]    = GMAIL_USER
+    msg["To"]      = to
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    for path in (attachments or []):
+        with open(path, "rb") as f:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{Path(path).name}"')
+        msg.attach(part)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+        srv.login(GMAIL_USER, GMAIL_APP_PASS)
+        srv.send_message(msg)
+
+
+def gmail_fetch_unread(max_results: int = 10) -> list[dict]:
+    """Fetch unread emails via IMAP."""
+    import imaplib, email as email_lib
+    from email.header import decode_header
+
+    if not GMAIL_APP_PASS:
+        return []
+
+    results = []
+    with imaplib.IMAP4_SSL("imap.gmail.com") as M:
+        M.login(GMAIL_USER, GMAIL_APP_PASS)
+        M.select("INBOX")
+        _, ids = M.search(None, "UNSEEN")
+        uid_list = ids[0].split()[-max_results:]
+        for uid in reversed(uid_list):
+            _, data = M.fetch(uid, "(RFC822)")
+            msg = email_lib.message_from_bytes(data[0][1])
+            subj_raw, enc = decode_header(msg["Subject"] or "")[0]
+            subj = subj_raw.decode(enc or "utf-8") if isinstance(subj_raw, bytes) else subj_raw
+            sender = msg.get("From", "")
+            body = ""
+            attachments = []
+            for part in msg.walk():
+                ct = part.get_content_type()
+                disp = str(part.get("Content-Disposition", ""))
+                if ct == "text/plain" and "attachment" not in disp:
+                    body += part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                elif "attachment" in disp:
+                    fname = part.get_filename()
+                    if fname:
+                        attachments.append(fname)
+            results.append({"subject": subj, "from": sender, "body": body[:500], "attachments": attachments})
+    return results
+
+
+async def cmd_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/email — שלח/קרא מיילים דרך הבוט."""
+    args = context.args
+    if not args:
+        unread = gmail_fetch_unread(5)
+        if not unread:
+            await update.message.reply_text("📭 אין מיילים חדשים ב-topazjudo@gmail.com")
+            return
+        lines = [f"📬 *{len(unread)} מיילים חדשים:*"]
+        for m in unread:
+            att = f" 📎 {', '.join(m['attachments'])}" if m['attachments'] else ""
+            lines.append(f"\n*{m['subject']}*\nמ: {m['from']}{att}\n{m['body'][:120]}...")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    # /email <to> <subject> | <body>
+    text = " ".join(args)
+    if "|" in text:
+        header, body = text.split("|", 1)
+        parts = header.strip().split(None, 1)
+        to = parts[0] if parts else GMAIL_USER
+        subject = parts[1] if len(parts) > 1 else "הודעה מהבוט"
+    else:
+        to, subject, body = GMAIL_USER, "הודעה מהבוט", text
+
+    try:
+        gmail_send(to, subject.strip(), body.strip())
+        await update.message.reply_text(f"✅ מייל נשלח ל-{to}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה: {e}")
+
+
 async def _belt_wizard_finish(message, user_id: str):
     """Generate belt ceremony WhatsApp message and add to calendar."""
     import datetime as _dt
@@ -2882,6 +2983,7 @@ def main():
     app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CommandHandler("correction", correction_command))
     app.add_handler(CommandHandler("corrections", show_corrections_command))
+    app.add_handler(CommandHandler("email", cmd_email))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
