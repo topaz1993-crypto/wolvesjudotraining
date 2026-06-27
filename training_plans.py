@@ -703,6 +703,39 @@ def parse_multigroup_text(text: str) -> tuple:
     return branch, groups
 
 
+def detect_branch_and_date(text: str):
+    """
+    Try to detect branch name and date from free text.
+    Returns (branch_or_None, date_or_None).
+    """
+    import re
+    from datetime import date, timedelta
+
+    # Detect branch — longest match wins
+    branch = None
+    for b in sorted(BRANCH_TABS, key=len, reverse=True):
+        if b in text:
+            branch = b
+            break
+
+    # Detect date — DD/MM or relative words
+    plan_date = None
+    today = date.today()
+    if "היום" in text:
+        plan_date = today
+    elif "מחר" in text:
+        plan_date = today + timedelta(days=1)
+    else:
+        m = re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        if m:
+            try:
+                plan_date = date(today.year, int(m.group(2)), int(m.group(1)))
+            except ValueError:
+                pass
+
+    return branch, plan_date
+
+
 def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     """
     Save a full training day plan for a branch.
@@ -711,7 +744,6 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     Returns a summary string.
     """
     import weekly_schedule as _ws
-    import re
 
     # Get groups for this branch on this day (from schedule)
     sched_groups = _ws.groups_for_branch_on_date(branch, plan_date)
@@ -749,97 +781,125 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
 
 def _split_plan_into_sections(text: str, sched_groups: list) -> list:
     """
-    Split raw plan text into sections, one per group.
+    Split plan text into per-group sections.
     Returns list of (group_info_dict, items_list).
-    Tries to match sections to groups by name, time, or sequential order.
+
+    Supports three formats:
+      1. "ד-ו: גאורגי, תרגול דה אשי, רנדורי"  (colon on same line, comma-separated or newlines)
+      2. "⏰ 14:30 | 👥 ד-ו\n• גאורגי\n• תרגול"  (Claude emoji format)
+      3. No markers → all content goes to first group only, rest empty
     """
     import re
 
-    # Clean bullet lines into items
+    def _clean_line(line: str) -> str:
+        line = line.strip()
+        line = re.sub(r'^[•\-\*]\s*', '', line)
+        if line.startswith("נושא:"):
+            line = line.replace("נושא:", "").strip()
+        return line
+
     def _extract_items(block: str) -> list:
         items = []
         for line in block.splitlines():
-            line = line.strip()
-            if not line:
+            cleaned = _clean_line(line)
+            if not cleaned or re.match(r'^[-—=]{3,}$', cleaned):
                 continue
-            # Skip pure separator lines
-            if re.match(r'^[-—=]{3,}$', line):
-                continue
-            # Remove bullet prefixes
-            line = re.sub(r'^[•\-\*]\s*', '', line)
-            # Remove "נושא:" prefix but keep content
-            if line.startswith("נושא:"):
-                line = line.replace("נושא:", "").strip()
-            if line:
-                items.append(line)
+            # Split comma-separated items (e.g. "גאורגי, תרגול, רנדורי")
+            if ',' in cleaned:
+                for part in cleaned.split(','):
+                    p = part.strip()
+                    if p:
+                        items.append(p)
+            else:
+                items.append(cleaned)
         return items
 
-    # Try to split by group name mentions or time markers
-    # Patterns: "⏰ 14:30 | 👥 ד-ו", "**ד-ו**", "ד-ו:", time + group on same line
-    split_pattern = re.compile(
-        r'(?:⏰\s*\d{1,2}:\d{2}.*?👥.*?$|^\d{1,2}:\d{2}\s*[|–-].*$|^(?:קבוצה\s+)?([^\n:]{1,20}):$)',
-        re.MULTILINE
-    )
+    def _best_match(label: str, groups: list, used: set) -> int:
+        """Return index of best matching schedule group for a label."""
+        label_clean = label.strip().replace('*', '').replace('_', '')
+        best_idx, best_score = -1, 0
+        for i, sg in enumerate(groups):
+            if i in used:
+                continue
+            name = sg["name"]
+            score = 0
+            if label_clean == name:
+                score = 10
+            elif label_clean in name or name in label_clean:
+                score = 6
+            elif any(part and part in name for part in label_clean.split('-')):
+                score = 3
+            if score > best_score:
+                best_score, best_idx = score, i
+        return best_idx if best_score > 0 else -1
 
-    # Find split points
-    splits = list(re.finditer(
-        r'(?m)^(?:⏰\s*)?(\d{1,2}:\d{2})\s*[|–-]\s*(?:👥\s*)?(.{1,30}?)(?:\s*[\(\*].*)?$',
+    # ── Format 1: group name on a line ending with ":" or "group_name: content" ──
+    # Example: "ד-ו: גאורגי, תרגול..." or "ד-ו:\nגאורגי\nתרגול..."
+    # Build a pattern from all known group names
+    group_names_pattern = '|'.join(
+        re.escape(sg["name"]) for sg in sched_groups
+    )
+    colon_splits = list(re.finditer(
+        rf'(?m)^[ \t]*({group_names_pattern})\s*:\s*(.*)?$',
         text
     ))
 
-    if splits and len(splits) >= 2:
-        # Text has clear group markers — split by them
+    if colon_splits:
         sections_raw = []
-        for i, m in enumerate(splits):
-            group_label = m.group(2).strip().rstrip('*').strip()
+        for i, m in enumerate(colon_splits):
+            label = m.group(1).strip()
+            inline_content = m.group(2).strip() if m.group(2) else ""
             start = m.end()
-            end = splits[i+1].start() if i+1 < len(splits) else len(text)
-            block = text[start:end]
-            sections_raw.append((group_label, _extract_items(block)))
+            end = colon_splits[i + 1].start() if i + 1 < len(colon_splits) else len(text)
+            block_text = (inline_content + "\n" + text[start:end]).strip()
+            items = _extract_items(block_text)
+            sections_raw.append((label, items))
 
-        # Match each section to a schedule group
         result = []
-        used_sched = set()
+        used = set()
         for label, items in sections_raw:
-            best_match = None
-            best_score = 0
-            for gi, sg in enumerate(sched_groups):
-                if gi in used_sched:
-                    continue
-                score = 0
-                if label == sg["name"]:
-                    score = 10
-                elif label in sg["name"] or sg["name"] in label:
-                    score = 5
-                elif any(c in sg["name"] for c in label.split("-")):
-                    score = 2
-                if score > best_score:
-                    best_score = score
-                    best_match = gi
-            if best_match is not None:
-                used_sched.add(best_match)
-                result.append((sched_groups[best_match], items))
-            # Unmatched sections dropped (unlikely in practice)
-
-        # Any schedule groups with no content → add empty
-        for gi, sg in enumerate(sched_groups):
-            if gi not in used_sched:
+            idx = _best_match(label, sched_groups, used)
+            if idx >= 0:
+                used.add(idx)
+                result.append((sched_groups[idx], items))
+        for i, sg in enumerate(sched_groups):
+            if i not in used:
                 result.append((sg, []))
         return result
 
-    else:
-        # No clear markers — split text roughly equally among all groups
-        all_items = _extract_items(text)
-        n = len(sched_groups)
-        if n == 0:
-            return []
-        chunk = max(1, len(all_items) // n)
+    # ── Format 2: Claude emoji format ⏰ TIME | 👥 GROUP ──
+    emoji_splits = list(re.finditer(
+        r'(?m)^(?:⏰\s*)?(\d{1,2}:\d{2}[^|\n]*)\s*\|\s*(?:👥\s*)?(.{1,30}?)(?:\s*\(.*?)?\s*$',
+        text
+    ))
+
+    if emoji_splits:
+        sections_raw = []
+        for i, m in enumerate(emoji_splits):
+            label = m.group(2).strip().rstrip('*').strip()
+            start = m.end()
+            end = emoji_splits[i + 1].start() if i + 1 < len(emoji_splits) else len(text)
+            items = _extract_items(text[start:end])
+            sections_raw.append((label, items))
+
         result = []
+        used = set()
+        for label, items in sections_raw:
+            idx = _best_match(label, sched_groups, used)
+            if idx >= 0:
+                used.add(idx)
+                result.append((sched_groups[idx], items))
         for i, sg in enumerate(sched_groups):
-            start = i * chunk
-            end = start + chunk if i < n - 1 else len(all_items)
-            result.append((sg, all_items[start:end]))
+            if i not in used:
+                result.append((sg, []))
         return result
+
+    # ── Format 3: No markers — put all content in first group only ──
+    all_items = _extract_items(text)
+    result = [(sched_groups[0], all_items)] if sched_groups else []
+    for sg in sched_groups[1:]:
+        result.append((sg, []))
+    return result
 
 
 def is_multigroup_plan(text: str) -> bool:

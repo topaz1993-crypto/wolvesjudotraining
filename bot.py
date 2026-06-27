@@ -169,19 +169,87 @@ PLAN_GROUPS = {
     "נבחרת":      ["נבחרת"],
 }
 
-def _plan_branch_markup() -> InlineKeyboardMarkup:
-    branches = ["סירקין", "חגור", "נווה ירק", "אהרונוביץ", "פונקציונלי", "נבחרת"]
+def _branch_buttons(active_callback_prefix: str = "mg_branch") -> list:
+    """Return branch button rows with next training day marker."""
+    from datetime import date as _d, timedelta as _td
+    today = _d.today()
     rows = []
-    for i in range(0, len(branches), 2):
-        rows.append([InlineKeyboardButton(b, callback_data=f"pw_branch|{b}") for b in branches[i:i+2]])
+    for b in tp.BRANCH_TABS:
+        next_days = [today + _td(days=i) for i in range(7)
+                     if b in ws.branches_for_date(today + _td(days=i))]
+        marker = f" ({ws.day_name(next_days[0])} {next_days[0].day}/{next_days[0].month})" if next_days else ""
+        rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"{active_callback_prefix}|{b}")])
     rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-    return InlineKeyboardMarkup(rows)
+    return rows
 
-def _plan_group_markup(branch: str) -> InlineKeyboardMarkup:
-    groups = PLAN_GROUPS.get(branch, [])
-    rows = [[InlineKeyboardButton(g, callback_data=f"pw_group|{g}")] for g in groups]
-    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-    return InlineKeyboardMarkup(rows)
+def _date_buttons(branch: str) -> list:
+    """Return date button rows for next 5 training dates of a branch."""
+    from datetime import date as _d
+    today = _d.today()
+    btns = []
+    for d in ws.next_training_dates(branch, n=5):
+        diff = (d - today).days
+        prefix = "היום" if diff == 0 else "מחר" if diff == 1 else ws.day_name(d)
+        btns.append(InlineKeyboardButton(f"{prefix} {d.day}/{d.month}", callback_data=f"mg_date|{d.isoformat()}"))
+    rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch"),
+                 InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+    return rows
+
+async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_date):
+    """
+    Offer to save a training plan. Shows minimum buttons needed:
+    - If branch+date known → straight to save
+    - If only branch known → date buttons
+    - If nothing → branch buttons
+    """
+    from datetime import date as _d
+    ss = {"step": "mg_pick_branch", "text": plan_text, "groups": []}
+
+    if branch and plan_date:
+        # Both known — confirm directly
+        ss["branch"] = branch
+        ss["plan_date"] = plan_date.isoformat()
+        from training_plans import sheets_sessions as _  # not used, just typing note
+        import training_plans as _tp
+        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
+        group_names = ", ".join(g["name"] for g in sched_groups) if sched_groups else "לא ידוע"
+        from bot import sheets_sessions  # self-reference trick avoided — use global below
+        pass
+
+    if branch and plan_date and ws.groups_for_branch_on_date(branch, plan_date):
+        # Store and ask for confirmation
+        import training_plans as _tp
+        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
+        group_names = ", ".join(g["name"] for g in sched_groups)
+        sheets_sessions[user_id] = {**ss, "branch": branch, "step": "mg_pick_date"}
+        await update.message.reply_text(
+            f"💾 *שמור תוכנית*\n"
+            f"סניף: *{branch}* | {plan_date.day}/{plan_date.month}\n"
+            f"קבוצות: {group_names}\n\n"
+            f"לשמור?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"✅ כן, שמור {plan_date.day}/{plan_date.month}",
+                                      callback_data=f"mg_date|{plan_date.isoformat()}"),
+                 InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch")],
+                [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+            ])
+        )
+    elif branch and branch in tp.BRANCH_TABS:
+        sheets_sessions[user_id] = {**ss, "branch": branch, "step": "mg_pick_date"}
+        await update.message.reply_text(
+            f"💾 *שמור תוכנית — {branch}*\n\nלאיזה תאריך?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(_date_buttons(branch))
+        )
+    else:
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text(
+            "💾 *שמור תוכנית*\n\nאיזה סניף?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(_branch_buttons())
+        )
 
 
 def cancel_button() -> InlineKeyboardMarkup:
@@ -428,83 +496,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     user_id = str(update.effective_user.id)
 
-    # Training plan detection — user sends plan directly
-    # ── Multi-group training plan detection ──────────────────────────────────────
-    if tp.is_multigroup_plan(user_text) and not sheets_sessions.get(user_id):
-        branch, groups = tp.parse_multigroup_text(user_text)
-        if groups:
-            from datetime import date as _date, timedelta as _td
-
-            def _date_buttons_for_branch(b: str) -> list:
-                """Next 5 training dates for branch — skips Saturdays and non-training days."""
-                from datetime import date as _d2
-                today = _d2.today()
-                btns = []
-                for d in ws.next_training_dates(b, n=5):
-                    diff = (d - today).days
-                    if diff == 0:
-                        prefix = "היום"
-                    elif diff == 1:
-                        prefix = "מחר"
-                    else:
-                        prefix = ws.day_name(d)
-                    label = f"{prefix} {d.day}/{d.month}"
-                    btns.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
-                return btns
-
-            sheets_sessions[user_id] = {
-                "step":   "mg_pick_branch",
-                "groups": groups,
-                "text":   user_text,
-                "branch": branch,
-            }
-            group_names = ", ".join(g["group"] for g in groups)
-
-            if branch and branch in tp.BRANCH_TABS:
-                sheets_sessions[user_id]["step"] = "mg_pick_date"
-                date_btns = _date_buttons_for_branch(branch)
-                rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
-                rows.append([InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch"),
-                              InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-                await update.message.reply_text(
-                    f"🥋 *זיהיתי תוכנית*\n"
-                    f"קבוצות: {group_names}\n"
-                    f"סניף: *{branch}*\n\n"
-                    f"לאיזה תאריך? (✓ = יום אימון)",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(rows),
-                )
-            else:
-                # No branch detected — show all branches, mark upcoming training days
-                from datetime import date as _date, timedelta as _td
-                today = _date.today()
-                branch_rows = []
-                for b in tp.BRANCH_TABS:
-                    next_days = [_date.today() + _td(days=i) for i in range(7)
-                                 if b in ws.branches_for_date(_date.today() + _td(days=i))]
-                    marker = f" — {ws.day_name(next_days[0])} {next_days[0].day}/{next_days[0].month}" if next_days else ""
-                    branch_rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
-                branch_rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-                await update.message.reply_text(
-                    f"🥋 *זיהיתי תוכנית*\nקבוצות: {group_names}\n\nלאיזה סניף?",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(branch_rows),
-                )
-            return
-
-    DIRECT_PLAN_KW = ("E2MOM", "E1MOM", "EMOM", "Bench Press", "Pull-Ups", "Box Jumps",
-                      "Rope Climb", "DB Lunge", "Deadlift", "Squat", "Clean")
-    if any(k.lower() in user_text.lower() for k in DIRECT_PLAN_KW) and not sheets_sessions.get(user_id):
+    # ── Training plan detection — user sends plan directly ──────────────────────
+    PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "משחק", "כוח", "גאורגי", "נושא")
+    is_plan_text = (
+        sum(1 for k in PLAN_KEYWORDS if k in user_text) >= 2
+        and not sheets_sessions.get(user_id)
+        and len(user_text) > 20
+    )
+    if is_plan_text:
+        branch, plan_date = tp.detect_branch_and_date(user_text)
         pending_plans[user_id] = {"reply": user_text, "original": user_text}
         save_json(PENDING_FILE, pending_plans)
-        await update.message.reply_text(
-            "💪 זיהיתי תוכנית אימון!\n\n*לשמור בגיליון?*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💾 כן, שמור בגיליון", callback_data="menu_plan_save")],
-                [InlineKeyboardButton("לא תודה", callback_data="cancel_flow")],
-            ])
-        )
+        await _plan_offer_save(update, user_id, user_text, branch, plan_date)
         return
 
     # ── Plan sheet edit — natural language modification ───────────────────────────
@@ -1064,47 +1067,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_plan_save":
         await query.answer()
-        # Grab plan text already saved by Claude (pending_plans)
         plan_data = pending_plans.get(user_id, {})
         plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
-        sheets_sessions[user_id] = {"step": "mg_pick_branch", "text": plan_text, "groups": []}
-        today_br = ws.today_branches()
-        rows = []
-        for b in tp.BRANCH_TABS:
-            marker = " ✓" if b in today_br else ""
-            rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
-        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-        await query.message.reply_text(
-            "💾 *שמור תוכנית אימון*\n\nאיזה סניף? (✓ = מתאמן היום)",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(rows)
-        )
+        branch, plan_date = tp.detect_branch_and_date(plan_text)
+        # Use message object to call the shared helper
+        class _FakeUpdate:
+            def __init__(self, msg): self.message = msg
+        await _plan_offer_save(_FakeUpdate(query.message), user_id, plan_text, branch, plan_date)
         return
 
     # ── Plan wizard — confirm save ──
-    if action == "pw_confirm":
-        await query.answer()
-        ss = sheets_sessions.pop(user_id, {})
-        await query.message.reply_text("⏳ שומר בגיליון...")
-        await _plan_wizard_save(query.message, user_id, ss)
-        return
-
-    if action == "pw_reedit":
-        await query.answer()
-        ss = sheets_sessions.get(user_id, {})
-        ss["step"] = "pw_edit"
-        sheets_sessions[user_id] = ss
-        await query.message.reply_text(
-            "✏️ שלח שוב את התוכנית בניסוח אחר:",
-            reply_markup=cancel_button()
-        )
-        return
-
-    if action == "pw_cancel_edit":
-        await query.answer()
-        sheets_sessions.pop(user_id, None)
-        await query.message.reply_text("בוטל.", reply_markup=cancel_button())
-        return
 
     if action == "menu_design":
         await query.answer()
@@ -3066,54 +3038,6 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(f"❌ שגיאה: {e}")
         sheets_sessions.pop(user_id, None)
         pending_payments.pop(key, None)
-        return True
-
-    # ── Belt ceremony message ────────────────────────────────────────────────────
-    # ── Plan wizard — date input ──────────────────────────────────────────────────
-    if step == 'pw_date':
-        from datetime import date as date_cls
-        import re as _re
-        if "היום" in text:
-            plan_date = date_cls.today()
-        elif "מחר" in text:
-            from datetime import timedelta
-            plan_date = date_cls.today() + timedelta(days=1)
-        else:
-            dm = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
-            if not dm:
-                await update.message.reply_text("❌ לא הבנתי תאריך. נסה: `26/6` או `היום`", parse_mode="Markdown")
-                return True
-            plan_date = date_cls(date_cls.today().year, int(dm.group(2)), int(dm.group(1)))
-        ss["plan_date"] = plan_date.isoformat()
-        ss["step"] = "pw_text"
-        sheets_sessions[user_id] = ss
-        await update.message.reply_text(
-            f"✅ {plan_date.strftime('%d/%m/%Y')}\n\n"
-            "📋 *עכשיו שלח את תוכנית האימון:*\n"
-            "כתוב חופשי — הבוט יפרק אותה לפורמט הנכון",
-            parse_mode="Markdown",
-            reply_markup=cancel_button()
-        )
-        return True
-
-    # ── Plan wizard — plan text input ─────────────────────────────────────────────
-    if step == 'pw_text':
-        ss["plan_text"] = text
-        ss["step"] = "pw_preview"
-        sheets_sessions[user_id] = ss
-        branch = ss.get("branch", "")
-        group  = ss.get("group", "")
-        await update.message.reply_text("⏳ מפרק את התוכנית...")
-        await _plan_wizard_preview(update.message, user_id, ss)
-        return True
-
-    # ── Plan wizard — edit after preview ─────────────────────────────────────────
-    if step == 'pw_edit':
-        ss["plan_text"] = text
-        ss["step"] = "pw_preview"
-        sheets_sessions[user_id] = ss
-        await update.message.reply_text("⏳ מעדכן...")
-        await _plan_wizard_preview(update.message, user_id, ss)
         return True
 
     # ── Belt wizard — name input ──────────────────────────────────────────────────
