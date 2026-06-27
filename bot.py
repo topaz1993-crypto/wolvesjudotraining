@@ -625,7 +625,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "📋 פתח גיליון",
-                        url=f"googledrive://open?id=1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I"
+                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"
                     )
                 ]])
             )

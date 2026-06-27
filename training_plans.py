@@ -460,6 +460,9 @@ def save_multigroup_plan(branch: str, plan_date, groups: list[dict]) -> str:
         try:
             msg = save_plan_to_sheet(branch, g["group"], plan_date, g["items"])
             results.append(msg)
+        except ValueError as e:
+            # Group not found in this tab — skip silently with note
+            results.append(f"⚠️ {g['group']}: לא קיים בטאב {branch} — דולג")
         except Exception as e:
             results.append(f"❌ {g['group']}: {e}")
     return "\n".join(results)
