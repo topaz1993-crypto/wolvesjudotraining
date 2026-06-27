@@ -95,15 +95,27 @@ def _col_letter(col_0: int) -> str:
 
 
 def _parse_date(cell: str):
-    """Parse D/M or D/M/YYYY date string."""
+    """
+    Parse D/M or D/M/YYYY date string.
+    When year is absent, infers the correct season year:
+      season Sep Y → Jul Y+1. Today in Jan-Aug → Sep-Dec belong to Y-1.
+    """
     import re
     m = re.match(r'(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?', cell.strip())
     if not m:
         return None
     d, mo = int(m.group(1)), int(m.group(2))
-    y = int(m.group(3)) if m.group(3) else date_cls.today().year
-    if y < 100:
-        y += 2000
+    if m.group(3):
+        y = int(m.group(3))
+        if y < 100:
+            y += 2000
+    else:
+        today = date_cls.today()
+        # Season logic: if today is Jan-Aug, Sep-Dec dates are from previous year
+        if today.month <= 8 and mo >= 9:
+            y = today.year - 1
+        else:
+            y = today.year
     try:
         return date_cls(y, mo, d)
     except ValueError:
