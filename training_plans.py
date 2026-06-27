@@ -259,22 +259,22 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
 
     def _col_type(col_idx: int) -> str:
         """
-        Return 'last', 'past', 'today', 'future', or 'empty' for a date column.
-        'last' = most recently filled column (orange even if past date).
+        Return 'last', 'past', 'today', 'future', or 'nodate' for a date column.
+        'last'   = most recently filled date column (orange even if past).
+        'nodate' = column has no date header → treat as regular/neutral.
         """
         if col_idx >= len(header):
-            return "empty"
+            return "nodate"
         cell = header[col_idx].strip()
         if not cell:
-            return "empty"
+            return "nodate"
         d = _parse_date(cell)
         if d is None:
-            return "empty"   # non-date header
+            return "nodate"
         if d == today:
             return "today"
         if d > today:
             return "future"
-        # past date — check if it's the most recently filled column
         if col_idx == last_filled_col:
             return "last"
         return "past"
@@ -300,8 +300,7 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
             requests.append(_col_width(sheet_id, c, c + 1, 150))
         elif ctype == "future":
             requests.append(_col_width(sheet_id, c, c + 1, 135))
-        elif ctype == "empty":
-            requests.append(_col_width(sheet_id, c, c + 1, 30))
+        # nodate → keep default 120px (already set by the bulk request above)
 
     # Row heights
     requests.append(_row_height(sheet_id, 0, n_rows, 34))
@@ -317,14 +316,12 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
         ctype = _col_type(c)
         if ctype == "past":
             bg, txt, fsize = _PAST_HDR,   _WHITE, 10
-        elif ctype == "last":
-            bg, txt, fsize = _TODAY_HDR,  _WHITE, 12   # כתום בוהק — אימון אחרון
-        elif ctype == "today":
+        elif ctype in ("last", "today"):
             bg, txt, fsize = _TODAY_HDR,  _WHITE, 12
         elif ctype == "future":
             bg, txt, fsize = _FUTURE_HDR, _WHITE, 11
-        else:  # empty
-            bg, txt, fsize = _EMPTY_HDR,  _BLACK, 10
+        else:  # nodate → neutral, don't override existing header content
+            bg, txt, fsize = _WHITE,      _BLACK, 10
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
             "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt},
@@ -367,8 +364,8 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                 elif ctype == "future":
                     bg   = {"red": 1.00, "green": 0.99, "blue": 0.88} if row_alt else _FUTURE_CELL
                     bold = False
-                else:  # empty
-                    bg   = _EMPTY_CELL
+                else:  # nodate → white, normal
+                    bg   = _WHITE
                     bold = False
                 requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
                     "backgroundColor": bg,
