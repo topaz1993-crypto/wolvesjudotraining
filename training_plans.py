@@ -515,45 +515,48 @@ def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
 
 def smart_map_items(items: list[str], n_rows: int) -> list[str]:
     """
-    Use Claude to map free-text plan items to the correct sheet rows.
-    Returns list of n_rows strings (empty string = leave blank).
+    Map plan items to sheet rows by keyword detection.
     Row order: חימום, תרגול, קרבות, משחק, כוח, נוסף
+    Items that already match a row type are placed there;
+    unmatched items fill remaining slots sequentially.
     """
     if not items:
         return [""] * n_rows
 
     row_types = ROW_TYPES[:n_rows]
-    prompt = (
-        f"אתה עוזר לסדר תוכנית אימון ג'ודו לגיליון אקסל.\n"
-        f"יש {n_rows} שורות בסדר הבא: {', '.join(row_types)}\n\n"
-        f"פריטי התוכנית:\n"
-        + "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
-        + f"\n\nהשב JSON בלבד — מערך של בדיוק {n_rows} מחרוזות לפי סדר השורות.\n"
-        f"אם אין תוכן מתאים לשורה מסוימת — שים מחרוזת ריקה.\n"
-        f"אם יש כמה פריטים מאותו סוג — שלב אותם בשורה אחת.\n"
-        f"דוגמה: [\"חימום...\", \"תרגול...\", \"רנדורי 3:00\", \"משחק ציידים\", \"\", \"\"]"
-    )
+    result = [""] * n_rows
 
-    try:
-        resp = _claude.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = resp.content[0].text.strip()
-        import re
-        arr_match = re.search(r'\[.*\]', raw, re.DOTALL)
-        if arr_match:
-            mapped = json.loads(arr_match.group())
-            if isinstance(mapped, list):
-                # Pad or trim to n_rows
-                mapped = (mapped + [""] * n_rows)[:n_rows]
-                return [str(x) for x in mapped]
-    except Exception:
-        pass
+    # Keywords per row type
+    keywords = {
+        "חימום":  ["חימום", "ריצה", "גלגול", "שעון", "פתיחה", "ג'ורג'י", "גאורגי"],
+        "תרגול":  ["תרגול", "הדגמה", "הסבר", "חזרות", "נושא", "כניסה", "טכניקה", "עבודה"],
+        "קרבות":  ["רנדורי", "קרבות", "קרב", "ספרינג", "מצבי", "ניקוד", "זהב"],
+        "משחק":   ["משחק", "ציידים", "זאבים", "שועלים", "מלך", "כדור", "ביפ", "עיר"],
+        "כוח":    ["כוח", "טבאטה", "ברינג", "שכיבות", "מתח", "מקבילים", "פירמידה"],
+        "נוסף":   ["סיום", "שיחה", "דיון", "הערות", "תדריך"],
+    }
 
-    # Fallback: sequential fill
-    return (items + [""] * n_rows)[:n_rows]
+    used = set()
+    # First pass: match by keywords
+    for rt_idx, rt in enumerate(row_types):
+        if rt_idx >= n_rows:
+            break
+        kws = keywords.get(rt, [])
+        for item_idx, item in enumerate(items):
+            if item_idx in used or not item:
+                continue
+            if any(kw in item for kw in kws):
+                result[rt_idx] = item
+                used.add(item_idx)
+                break
+
+    # Second pass: fill remaining slots with unmatched items (sequential)
+    remaining = [item for i, item in enumerate(items) if i not in used and item]
+    for rt_idx in range(n_rows):
+        if not result[rt_idx] and remaining:
+            result[rt_idx] = remaining.pop(0)
+
+    return result
 
 
 def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]) -> str:
