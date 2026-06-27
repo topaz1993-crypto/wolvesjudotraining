@@ -819,17 +819,81 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if action.startswith("mg_date|"):
+    if action.startswith("mg_force|"):
         await query.answer()
         from datetime import date as _date
+        date_str = action.split("|", 1)[1]
+        plan_date = _date.fromisoformat(date_str)
+        ss = sheets_sessions.pop(user_id, {})
+        branch = ss.get("branch", "")
+        groups = ss.get("groups", [])
+        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}...")
+        try:
+            result = tp.save_multigroup_plan(branch, plan_date, groups)
+            await query.message.reply_text(f"✅ *נשמר!*\n\n{result}", parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📋 פתח גיליון",
+                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"),
+                    InlineKeyboardButton("↩️ בטל", callback_data="undo_last"),
+                ]]))
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה בשמירה: {e}")
+        return
+
+    if action.startswith("mg_date|"):
+        await query.answer()
+        from datetime import date as _date, timedelta as _td
         date_str = action.split("|", 1)[1]
         plan_date = _date.fromisoformat(date_str)
         ss = sheets_sessions.get(user_id, {})
         branch = ss.get("branch", "")
         groups = ss.get("groups", [])
-        sheets_sessions.pop(user_id, None)
 
-        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון...")
+        # Validate: does this branch train on the selected date?
+        branches_that_day = ws.branches_for_date(plan_date)
+        if branch and branch not in branches_that_day:
+            # Wrong branch for this day — offer correction
+            day_he = ws.day_name(plan_date)
+            if branches_that_day:
+                correct = branches_that_day[0]
+                # Auto-correct if only one branch trains that day
+                if len(branches_that_day) == 1:
+                    ss["branch"] = correct
+                    sheets_sessions[user_id] = ss
+                    branch = correct
+                    await query.edit_message_text(
+                        f"⚠️ *תוקן אוטומטית:* ביום {day_he} {plan_date.day}/{plan_date.month} "
+                        f"מתאמן *{correct}*, לא {branch}\n\n⏳ שומר...",
+                        parse_mode="Markdown"
+                    )
+                else:
+                    # Multiple branches that day — ask user
+                    ss["step"] = "mg_pick_branch"
+                    sheets_sessions[user_id] = ss
+                    rows = [[InlineKeyboardButton(b, callback_data=f"mg_branch|{b}")]
+                            for b in branches_that_day]
+                    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+                    await query.edit_message_text(
+                        f"⚠️ *{branch}* לא מתאמן ביום {day_he} {plan_date.day}/{plan_date.month}.\n"
+                        f"מי מתאמן ביום הזה?",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(rows)
+                    )
+                    return
+            else:
+                await query.edit_message_text(
+                    f"⚠️ לא מוגדר אימון ביום {day_he} {plan_date.day}/{plan_date.month}.\n"
+                    f"רוצה לשמור בכל זאת ל*{branch}*?",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("✅ כן, שמור", callback_data=f"mg_force|{date_str}"),
+                        InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow"),
+                    ]])
+                )
+                return
+
+        sheets_sessions.pop(user_id, None)
+        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}...")
         try:
             result = tp.save_multigroup_plan(branch, plan_date, groups)
             for g in groups:
