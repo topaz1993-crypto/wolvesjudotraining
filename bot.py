@@ -29,6 +29,7 @@ import payments_sheet
 import payments_report
 import dropout_detector
 import weekly_schedule as ws
+import training_archive as arc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -2233,21 +2234,6 @@ async def cmd_unpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def cmd_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/student <שם> — כרטיס ספורטאי."""
-    if not context.args:
-        await update.message.reply_text("שלח: `/student שם מלא`", parse_mode="Markdown")
-        return
-    await update.message.chat.send_action("typing")
-    name = " ".join(context.args)
-    s = payments_report.student_card(name)
-    if not s:
-        await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*", parse_mode="Markdown")
-        return
-    await update.message.reply_text(
-        payments_report.format_student_card(s),
-        parse_mode="Markdown"
-    )
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3688,6 +3674,164 @@ async def email_monitor_job(context):
         email_reader.mark_seen(em["id"])
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. תזכורת אימון יומית
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def daily_training_reminder_job(context):
+    """Runs every morning at 07:00 — sends today's training schedule."""
+    if not TOPAZ_CHAT_ID:
+        return
+    schedule = ws.today_schedule()
+    if not schedule:
+        return  # no training today
+
+    day_name = ws.today_name()
+    lines = [f"🥋 *בוקר טוב! יום {day_name} — לוז אימונים:*\n"]
+    for entry in schedule:
+        branch = entry["branch"]
+        lines.append(f"📍 *{branch}*")
+        for g in entry["groups"]:
+            lines.append(f"  {g['time']} — {g['name']}")
+        # Link to sheet
+        tab = entry.get("tab", branch)
+        from training_plans import SPREADSHEET_ID
+        url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid=0"
+        lines.append(f"  🔗 [פתח תוכנית]({url})")
+        lines.append("")
+
+    try:
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text="\n".join(lines),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        log.error("daily_training_reminder_job error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. סיכום שבועי
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def weekly_summary_job(context):
+    """Runs every Sunday at 08:00 — weekly training summary."""
+    if not TOPAZ_CHAT_ID:
+        return
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    # Only run on Sunday
+    if today.weekday() != 6:
+        return
+
+    week_start = today - _td(days=7)
+    lines = [f"📊 *סיכום שבוע {week_start.day}/{week_start.month} – {(today - _td(days=1)).day}/{(today - _td(days=1)).month}*\n"]
+
+    # Count plans saved this week from archive
+    records = arc._load()
+    from datetime import datetime as _dt
+    week_plans = [
+        r for r in records
+        if r.get("saved_at", "") >= week_start.isoformat()
+    ]
+
+    if week_plans:
+        by_branch: dict[str, list] = {}
+        for r in week_plans:
+            by_branch.setdefault(r["branch"], []).append(r["group"])
+        lines.append(f"🥋 *תוכניות שנשמרו:* {len(week_plans)}")
+        for branch, groups in sorted(by_branch.items()):
+            lines.append(f"  {branch}: {', '.join(sorted(set(groups)))}")
+        lines.append("")
+
+    # Dropout check
+    try:
+        at_risk = dropout_detector.find_at_risk_students(consecutive=2)
+        if at_risk:
+            lines.append(f"⚠️ *פספסו 2+ אימונים ברצף:* {len(at_risk)} ספורטאים")
+            for s in at_risk[:5]:
+                lines.append(f"  • {s['name']} ({s['branch']} / {s['group']})")
+            if len(at_risk) > 5:
+                lines.append(f"  ... ועוד {len(at_risk)-5}")
+        else:
+            lines.append("✅ אין ספורטאים בסיכון נשירה השבוע")
+    except Exception as e:
+        log.error("weekly_summary dropout error: %s", e)
+
+    try:
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text="\n".join(lines),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        log.error("weekly_summary_job error: %s", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. חיפוש ספורטאי (מורחב)
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/student <שם> — כרטיס ספורטאי מלא כולל נוכחות אחרונה."""
+    if not context.args:
+        await update.message.reply_text("שלח: `/student שם`", parse_mode="Markdown")
+        return
+    await update.message.chat.send_action("typing")
+    name = " ".join(context.args)
+    s = payments_report.student_card(name)
+    if not s:
+        await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*", parse_mode="Markdown")
+        return
+
+    # Base card (payments)
+    card = payments_report.format_student_card(s)
+
+    # Recent attendance from archive (last 5 sessions for this student's group/branch)
+    try:
+        group_records = arc.recent(branch=s.get("club"), n=5)
+        if group_records:
+            card += "\n\n📅 *5 אימונים אחרונים בסניף:*"
+            for r in group_records:
+                card += f"\n  {r['date']} — {r['group']}"
+    except Exception:
+        pass
+
+    await send_long(update, card, parse_mode="Markdown")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. ארכיון תוכניות
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def cmd_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/archive [שאילתה] — חיפוש בארכיון תוכניות האימון."""
+    await update.message.chat.send_action("typing")
+
+    if not context.args:
+        # Show stats
+        msg = arc.stats()
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
+    query = " ".join(context.args)
+    results = arc.search(query)
+
+    if not results:
+        await update.message.reply_text(
+            f"🔍 לא מצאתי תוכניות עבור: *{query}*\n\nנסה: שם קבוצה, סניף, או תאריך",
+            parse_mode="Markdown"
+        )
+        return
+
+    lines = [f"🔍 *תוצאות עבור: {query}*\n"]
+    for r in results:
+        lines.append(arc.format_plan(r))
+        lines.append("")
+
+    await send_long(update, "\n".join(lines), parse_mode="Markdown")
+
+
 def main():
     # Clear undo file on startup — prevents stale undo buttons from prior run
     att.clear_dropout_undo()
@@ -3713,6 +3857,7 @@ def main():
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("unpaid", cmd_unpaid))
     app.add_handler(CommandHandler("student", cmd_student))
+    app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("dropout", cmd_dropout))
     app.add_handler(CallbackQueryHandler(handle_callback))
@@ -3720,9 +3865,11 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     # Background jobs
     if TOPAZ_CHAT_ID:
-        app.job_queue.run_repeating(email_monitor_job,    interval=600,   first=60)
-        app.job_queue.run_repeating(monthly_report_job,   interval=86400, first=120)
-        app.job_queue.run_repeating(dropout_monitor_job,  interval=86400, first=180)
+        app.job_queue.run_repeating(email_monitor_job,             interval=600,   first=60)
+        app.job_queue.run_repeating(monthly_report_job,            interval=86400, first=120)
+        app.job_queue.run_repeating(dropout_monitor_job,           interval=86400, first=180)
+        app.job_queue.run_daily(daily_training_reminder_job,       time=__import__("datetime").time(7, 0))
+        app.job_queue.run_daily(weekly_summary_job,                time=__import__("datetime").time(8, 0))
         log.info("Background jobs started")
     else:
         log.warning("TOPAZ_CHAT_ID not set — background jobs disabled")

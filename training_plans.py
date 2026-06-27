@@ -598,6 +598,14 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     # Refresh design after save
     design_tab(service, tab_name, sheet_id, delete_empty=False)
 
+    # Save to archive
+    try:
+        import training_archive as _arc
+        content = {ROW_TYPES[i]: mapped[i] for i in range(len(mapped)) if i < len(ROW_TYPES) and mapped[i]}
+        _arc.save_plan(branch, tab_name, group, plan_date.isoformat(), content)
+    except Exception:
+        pass
+
     date_str = f"{plan_date.day}/{plan_date.month}"
     return f"✅ נשמר בגיליון {tab_name} — {group} — {date_str} ({len(updates)} שורות)"
 
