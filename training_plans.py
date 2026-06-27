@@ -131,9 +131,25 @@ def _parse_date(cell: str):
 
 
 def _find_empty_date_cols(rows: list, header: list) -> list[int]:
-    """Return 0-based indices of date columns (col>=2) where ALL content rows are empty."""
+    """
+    Return 0-based indices of date columns (col>=2) that are safe to delete:
+    - Must have a valid date header
+    - Must be in the PAST (not today, not future)
+    - Must have no content in any body row
+    """
+    from datetime import date as _date
+    today = _date.today()
     empty = []
     for c in range(2, len(header)):
+        cell = header[c].strip() if c < len(header) else ""
+        if not cell:
+            continue
+        d = _parse_date(cell)
+        if d is None:
+            continue
+        # Never delete today or future columns
+        if d >= today:
+            continue
         has_content = any(c < len(row) and row[c].strip() for row in rows[1:])
         if not has_content:
             empty.append(c)
