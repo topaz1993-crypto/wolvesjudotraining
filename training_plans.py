@@ -287,13 +287,18 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     # Adjust indices: rows[1:] offset
     group_blocks = [(g[0] + 1, g[1] + 1, g[2]) for g in group_blocks]
 
-    # Identify title rows: rows where A=שעה, B=group, C=group (inserted title rows)
+    # Identify title rows: rows with empty A,B but content in date cols (new format)
+    # OR old format: A has time, B has content, C == B
     title_rows = set()
     for i, r in enumerate(rows[1:], start=1):
+        a = r[0].strip() if len(r) > 0 else ''
         b = r[1].strip() if len(r) > 1 else ''
         c = r[2].strip() if len(r) > 2 else ''
-        a = r[0].strip() if len(r) > 0 else ''
-        if a and b and b != 'קבוצה' and c == b:
+        # New format: A and B empty, at least one date col has content
+        if not a and not b and any(r[j].strip() for j in range(2, len(r))):
+            title_rows.add(i)
+        # Old format (will be migrated): A=time, B=group, C==B
+        elif a and b and b != 'קבוצה' and c == b:
             title_rows.add(i)
 
     requests = []
@@ -438,6 +443,71 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     return deleted
 
 
+def fix_title_rows(service, tab_name: str) -> int:
+    """
+    Migrate title rows from old format (A=time, B=group, C=group) to new format
+    (A="", B="", date cols = group name only where the group has training content).
+    Also updates already-new-format title rows to reflect correct content.
+    Returns number of rows updated.
+    """
+    rows = _read_tab(service, tab_name)
+    if not rows:
+        return 0
+
+    n_cols = max(len(r) for r in rows)
+    value_updates = []
+    count = 0
+
+    NO_TRAINING = {'אין אימון', 'בוטל', 'בוטל האימון', 'אין', 'חג', 'חופש'}
+
+    # Find all group header rows (A=time, B=group_name, B != 'קבוצה')
+    group_headers = []
+    for i, r in enumerate(rows):
+        a = r[0].strip() if len(r) > 0 else ''
+        b = r[1].strip() if len(r) > 1 else ''
+        if a and b and b != 'קבוצה':
+            group_headers.append((i, b))
+
+    for gi, (hdr_idx, group_name) in enumerate(group_headers):
+        # Title row is one row before the header row
+        title_idx = hdr_idx - 1
+        if title_idx < 1:  # skip if before header row 0
+            continue
+
+        # Content rows: from hdr_idx to the row before the NEXT group header (or title row)
+        next_boundary = group_headers[gi + 1][0] - 1 if gi + 1 < len(group_headers) else len(rows)
+        content_end = min(hdr_idx + 7, next_boundary, len(rows))
+        content_rows = range(hdr_idx, content_end)
+
+        def _has_real(c_idx):
+            # Primary check: the group header row (first content row = חימום)
+            hdr_cell = rows[hdr_idx][c_idx].strip() if len(rows[hdr_idx]) > c_idx else ''
+            if not hdr_cell:
+                return False
+            if any(m in hdr_cell for m in NO_TRAINING):
+                return False
+            return True
+
+        new_row = ['', '']
+        for c_idx in range(2, n_cols):
+            new_row.append(group_name if _has_real(c_idx) else '')
+
+        row_1based = title_idx + 1
+        value_updates.append({
+            "range": f"'{tab_name}'!A{row_1based}:{_col_letter(n_cols - 1)}{row_1based}",
+            "values": [new_row]
+        })
+        count += 1
+
+    if value_updates:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"valueInputOption": "RAW", "data": value_updates}
+        ).execute()
+
+    return count
+
+
 def add_group_title_rows(service, tab_name: str, sheet_id: int) -> int:
     """
     Insert a dedicated group-title row above each group block.
@@ -492,19 +562,45 @@ def add_group_title_rows(service, tab_name: str, sheet_id: int) -> int:
     rows = _read_tab(service, tab_name)
     n_cols = max(len(r) for r in rows)
 
-    # Write group name in each new title row
+    # Re-read to get updated row positions and content
+    rows = _read_tab(service, tab_name)
+    n_cols = max(len(r) for r in rows)
+
+    # Write group name in new title rows — A,B empty; date cols = group name only where content exists
     value_updates = []
     group_starts_sorted = sorted(group_starts, key=lambda x: x[0])
     offset = 0
     for orig_idx, time_val, group_name in group_starts_sorted:
-        title_row_idx = orig_idx + offset  # shifted by previously inserted rows
-        row_1based = title_row_idx + 1  # 1-based for Sheets API
+        title_row_idx = orig_idx + offset
+        row_1based = title_row_idx + 1
 
-        # Col A = time, Col B = group name, date cols = group name
-        row_data = [time_val, group_name] + [group_name] * (n_cols - 2)
+        # Content rows are immediately after the title row (title is at orig_idx+offset, header at orig_idx+offset+1)
+        content_start = title_row_idx + 1
+        actual_end = content_start + 1  # at minimum include header row
+        for k in range(content_start + 1, min(content_start + 8, len(rows))):
+            rk = rows[k]
+            rk_a = rk[0].strip() if len(rk) > 0 else ''
+            rk_b = rk[1].strip() if len(rk) > 1 else ''
+            if rk_a and rk_b and rk_b != 'קבוצה':
+                break
+            actual_end = k + 1
+
+        NO_TRAINING_2 = {'אין אימון', 'בוטל', 'בוטל האימון', 'אין', 'חג', 'חופש'}
+
+        def _has_real2(rows_ref, content_s, content_e, c_idx):
+            for k in range(content_s, content_e):
+                cell = rows_ref[k][c_idx].strip() if len(rows_ref[k]) > c_idx else ''
+                if cell and not any(m in cell for m in NO_TRAINING_2):
+                    return True
+            return False
+
+        new_row = ['', '']
+        for c_idx in range(2, n_cols):
+            new_row.append(group_name if _has_real2(rows, content_start, actual_end, c_idx) else '')
+
         value_updates.append({
             "range": f"'{tab_name}'!A{row_1based}:{_col_letter(n_cols - 1)}{row_1based}",
-            "values": [row_data]
+            "values": [new_row]
         })
         offset += 1
 
