@@ -3679,8 +3679,11 @@ async def email_monitor_job(context):
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def daily_training_reminder_job(context):
-    """Runs every morning at 07:00 — sends today's training schedule."""
+    """Runs every morning at 07:00 Israel time — sends today's training schedule."""
     if not TOPAZ_CHAT_ID:
+        return
+    hour = datetime.now().hour
+    if hour != 7:
         return
     schedule = ws.today_schedule()
     if not schedule:
@@ -3715,13 +3718,13 @@ async def daily_training_reminder_job(context):
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def weekly_summary_job(context):
-    """Runs every Sunday at 08:00 — weekly training summary."""
+    """Runs every Sunday at 08:00 Israel time — weekly training summary."""
     if not TOPAZ_CHAT_ID:
         return
     from datetime import date as _date, timedelta as _td
     today = _date.today()
-    # Only run on Sunday
-    if today.weekday() != 6:
+    hour = datetime.now().hour
+    if today.weekday() != 6 or hour != 8:
         return
 
     week_start = today - _td(days=7)
@@ -3868,8 +3871,8 @@ def main():
         app.job_queue.run_repeating(email_monitor_job,             interval=600,   first=60)
         app.job_queue.run_repeating(monthly_report_job,            interval=86400, first=120)
         app.job_queue.run_repeating(dropout_monitor_job,           interval=86400, first=180)
-        app.job_queue.run_daily(daily_training_reminder_job,       time=__import__("datetime").time(7, 0))
-        app.job_queue.run_daily(weekly_summary_job,                time=__import__("datetime").time(8, 0))
+        app.job_queue.run_repeating(daily_training_reminder_job,  interval=86400, first=60)
+        app.job_queue.run_repeating(weekly_summary_job,           interval=86400, first=120)
         log.info("Background jobs started")
     else:
         log.warning("TOPAZ_CHAT_ID not set — background jobs disabled")
