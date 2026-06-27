@@ -579,9 +579,8 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     if not all_group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
-    # Skip the first row — it's the group header (has group name in col B)
-    # Content goes only to rows after the header
-    content_rows = all_group_rows[1:]
+    # Include the header row — col B has the group name but the date column also holds חימום
+    content_rows = all_group_rows
     if not content_rows:
         raise ValueError(f"אין שורות תוכן לקבוצה '{group}'")
 
