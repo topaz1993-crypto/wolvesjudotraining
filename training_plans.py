@@ -30,17 +30,33 @@ BRANCH_TABS = {
 ALL_TABS = list(BRANCH_TABS.values())
 
 # ── Color palette ──────────────────────────────────────────────────────────────
-_NAVY       = {"red": 0.13, "green": 0.19, "blue": 0.36}
-_WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
-_DATE_BG    = {"red": 0.82, "green": 0.87, "blue": 0.95}   # past date header
-_LAST_HDR   = {"red": 0.98, "green": 0.60, "blue": 0.12}   # latest plan header (orange)
-_LAST_CELL  = {"red": 1.00, "green": 0.95, "blue": 0.80}   # latest plan content cells
-_GROUP_A    = {"red": 0.18, "green": 0.39, "blue": 0.60}   # group header shade 1
-_GROUP_B    = {"red": 0.24, "green": 0.48, "blue": 0.68}   # group header shade 2
-_ROW_A      = {"red": 0.95, "green": 0.97, "blue": 1.00}
-_ROW_B      = {"red": 1.00, "green": 1.00, "blue": 1.00}
-_BORDER     = {"red": 0.7,  "green": 0.7,  "blue": 0.8}
-_BLACK      = {"red": 0.0,  "green": 0.0,  "blue": 0.0}
+_NAVY        = {"red": 0.10, "green": 0.16, "blue": 0.32}   # כותרת שעה/קבוצה
+_WHITE       = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
+_BLACK       = {"red": 0.0,  "green": 0.0,  "blue": 0.0}
+_BORDER      = {"red": 0.65, "green": 0.65, "blue": 0.75}
+
+# עמודות עבר — כחול כהה
+_PAST_HDR    = {"red": 0.12, "green": 0.28, "blue": 0.53}   # כותרת כחול כהה
+_PAST_CELL   = {"red": 0.82, "green": 0.89, "blue": 0.97}   # תא כחול בהיר
+
+# עמודת היום — כתום בוהק
+_TODAY_HDR   = {"red": 0.95, "green": 0.45, "blue": 0.05}   # כותרת כתום חזק
+_TODAY_CELL  = {"red": 1.00, "green": 0.96, "blue": 0.72}   # תא צהוב-קרם
+
+# עמודת עתיד / אחרון — כתום עדין
+_FUTURE_HDR  = {"red": 0.98, "green": 0.60, "blue": 0.12}   # כתום בינוני
+_FUTURE_CELL = {"red": 1.00, "green": 0.97, "blue": 0.84}   # קרם חם
+
+# קבוצות
+_GROUP_A     = {"red": 0.15, "green": 0.35, "blue": 0.58}
+_GROUP_B     = {"red": 0.22, "green": 0.44, "blue": 0.66}
+_ROW_A       = {"red": 0.94, "green": 0.96, "blue": 1.00}
+_ROW_B       = {"red": 1.00, "green": 1.00, "blue": 1.00}
+
+# Legacy aliases (used by _find_or_create_date_col)
+_DATE_BG    = _PAST_HDR
+_LAST_HDR   = _FUTURE_HDR
+_LAST_CELL  = _FUTURE_CELL
 
 
 def _get_service():
@@ -209,6 +225,23 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     n_cols = max(len(r) for r in rows) if rows else 3
     n_rows = len(rows)
 
+    # ── Classify each date column as past / today / future ────────────────────
+    today = date_cls.today()
+
+    def _col_type(col_idx: int) -> str:
+        """Return 'past', 'today', or 'future' for a date column."""
+        if col_idx >= len(header):
+            return "future"
+        cell = header[col_idx].strip()
+        d = _parse_date(cell)
+        if d is None:
+            return "future"
+        if d < today:
+            return "past"
+        if d == today:
+            return "today"
+        return "future"
+
     # ── Find last column that has ANY content in body rows ─────────────────────
     last_filled_col = None
     for c in range(n_cols - 1, 1, -1):
@@ -230,14 +263,18 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     requests.append(_col_width(sheet_id, 1, 2, 80))   # קבוצה
     if n_cols > 2:
         requests.append(_col_width(sheet_id, 2, n_cols, 120))
-    # Make last filled column slightly wider so it stands out
-    if last_filled_col:
-        requests.append(_col_width(sheet_id, last_filled_col, last_filled_col + 1, 140))
+    # Widen today's column and future columns for visibility
+    for c in range(2, n_cols):
+        ctype = _col_type(c)
+        if ctype == "today":
+            requests.append(_col_width(sheet_id, c, c + 1, 150))
+        elif ctype == "future":
+            requests.append(_col_width(sheet_id, c, c + 1, 135))
 
     # Row heights
     requests.append(_row_height(sheet_id, 0, n_rows, 34))
 
-    # ── Header row (row 0): שעה + קבוצה = navy, dates = blue, last = orange ────
+    # ── Header row (row 0): שעה + קבוצה = navy, dates by type ────────────────
     requests.append(_repeat_cell(sheet_id, 0, 1, 0, 2, {
         "backgroundColor": _NAVY,
         "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": _WHITE},
@@ -245,13 +282,16 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
         "wrapStrategy": "WRAP",
     }))
     for c in range(2, n_cols):
-        is_last = (last_filled_col is not None and c == last_filled_col)
-        bg = _LAST_HDR if is_last else _DATE_BG
-        txt_color = _WHITE if is_last else _BLACK
-        fsize = 11 if is_last else 10
+        ctype = _col_type(c)
+        if ctype == "past":
+            bg, txt, fsize = _PAST_HDR,   _WHITE, 10
+        elif ctype == "today":
+            bg, txt, fsize = _TODAY_HDR,  _WHITE, 12
+        else:
+            bg, txt, fsize = _FUTURE_HDR, _WHITE, 11
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
-            "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt_color},
+            "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt},
             "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
             "wrapStrategy": "WRAP",
         }))
@@ -270,19 +310,27 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
 
         # Content rows
         for r in range(g_start + 1, g_end):
-            row_bg = _ROW_A if (r - g_start) % 2 == 0 else _ROW_B
-            # name cols (A, B) — center
+            row_alt = (r - g_start) % 2 == 0
+            # name cols (A, B) — always neutral
+            row_bg = _ROW_A if row_alt else _ROW_B
             requests.append(_repeat_cell(sheet_id, r, r + 1, 0, 2, {
                 "backgroundColor": row_bg,
                 "textFormat": {"fontSize": 10},
                 "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "WRAP",
             }))
-            # date content cols
+            # date content cols — color by past/today/future
             for c in range(2, n_cols):
-                is_last = (last_filled_col is not None and c == last_filled_col)
-                bg = _LAST_CELL if is_last else row_bg
-                bold = is_last
+                ctype = _col_type(c)
+                if ctype == "past":
+                    bg   = {"red": 0.86, "green": 0.91, "blue": 0.97} if row_alt else _PAST_CELL
+                    bold = False
+                elif ctype == "today":
+                    bg   = {"red": 1.00, "green": 0.98, "blue": 0.80} if row_alt else _TODAY_CELL
+                    bold = True
+                else:
+                    bg   = {"red": 1.00, "green": 0.99, "blue": 0.88} if row_alt else _FUTURE_CELL
+                    bold = False
                 requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
                     "backgroundColor": bg,
                     "textFormat": {"fontSize": 10, "bold": bold},
