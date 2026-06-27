@@ -433,10 +433,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tp.is_multigroup_plan(user_text) and not sheets_sessions.get(user_id):
         branch, groups = tp.parse_multigroup_text(user_text)
         if groups:
-            # Auto-detect branch from today's schedule if not found in text
-            today_branches = ws.today_branches()
-            if not branch and len(today_branches) == 1:
-                branch = today_branches[0]
+            from datetime import date as _date, timedelta as _td
+
+            def _date_buttons_for_branch(b: str) -> list:
+                """7 days of buttons — ✓ marks days the branch actually trains."""
+                btns = []
+                today = _date.today()
+                for i in range(7):
+                    d = today + _td(days=i)
+                    trains = b in ws.branches_for_date(d)
+                    prefix = "✓ " if trains else ""
+                    if i == 0:
+                        label = f"{prefix}היום {d.day}/{d.month}"
+                    elif i == 1:
+                        label = f"{prefix}מחר {d.day}/{d.month}"
+                    else:
+                        label = f"{prefix}{ws.day_name(d)} {d.day}/{d.month}"
+                    btns.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
+                return btns
 
             sheets_sessions[user_id] = {
                 "step":   "mg_pick_branch",
@@ -445,41 +459,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "branch": branch,
             }
             group_names = ", ".join(g["group"] for g in groups)
-            today_day = ws.today_name()
 
-            # If branch is clear from today's schedule — skip branch selection
             if branch and branch in tp.BRANCH_TABS:
                 sheets_sessions[user_id]["step"] = "mg_pick_date"
-                from datetime import date as _date, timedelta as _td
-                today = _date.today()
-                date_btns = []
-                for i in range(7):
-                    d = today + _td(days=i)
-                    label = f"{'היום' if i==0 else 'מחר' if i==1 else ws.day_name(d)} {d.day}/{d.month}"
-                    date_btns.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
+                date_btns = _date_buttons_for_branch(branch)
                 rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
                 rows.append([InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch"),
                               InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
                 await update.message.reply_text(
-                    f"🥋 *זיהיתי תוכנית — יום {today_day}*\n"
+                    f"🥋 *זיהיתי תוכנית*\n"
                     f"קבוצות: {group_names}\n"
                     f"סניף: *{branch}*\n\n"
-                    f"לאיזה תאריך?",
+                    f"לאיזה תאריך? (✓ = יום אימון)",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(rows),
                 )
             else:
-                rows = []
+                # No branch detected — show all branches, mark upcoming training days
+                from datetime import date as _date, timedelta as _td
+                today = _date.today()
+                branch_rows = []
                 for b in tp.BRANCH_TABS:
-                    marker = " ✓" if b in today_branches else ""
-                    rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
-                rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+                    next_days = [_date.today() + _td(days=i) for i in range(7)
+                                 if b in ws.branches_for_date(_date.today() + _td(days=i))]
+                    marker = f" — {ws.day_name(next_days[0])} {next_days[0].day}/{next_days[0].month}" if next_days else ""
+                    branch_rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
+                branch_rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
                 await update.message.reply_text(
-                    f"🥋 *זיהיתי תוכנית — יום {today_day}*\n"
-                    f"קבוצות: {group_names}\n\n"
-                    f"לאיזה סניף? (✓ = מתאמן היום)",
+                    f"🥋 *זיהיתי תוכנית*\nקבוצות: {group_names}\n\nלאיזה סניף?",
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(rows),
+                    reply_markup=InlineKeyboardMarkup(branch_rows),
                 )
             return
 
@@ -786,20 +795,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ss["branch"] = branch
         ss["step"] = "mg_pick_date"
         sheets_sessions[user_id] = ss
-        # Offer quick dates
         from datetime import date as _date, timedelta as _td
         today = _date.today()
         date_options = []
         for i in range(7):
             d = today + _td(days=i)
-            days_he = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
-            label = f"{'היום' if i==0 else 'מחר' if i==1 else days_he[d.weekday()]} {d.day}/{d.month}"
+            trains = branch in ws.branches_for_date(d)
+            prefix = "✓ " if trains else ""
+            if i == 0:
+                label = f"{prefix}היום {d.day}/{d.month}"
+            elif i == 1:
+                label = f"{prefix}מחר {d.day}/{d.month}"
+            else:
+                label = f"{prefix}{ws.day_name(d)} {d.day}/{d.month}"
             date_options.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
         rows = [date_options[i:i+2] for i in range(0, len(date_options), 2)]
         rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
         groups_str = ", ".join(g["group"] for g in ss.get("groups", []))
         await query.edit_message_text(
-            f"✅ סניף: *{branch}*\nקבוצות: {groups_str}\n\nלאיזה תאריך?",
+            f"✅ סניף: *{branch}*\nקבוצות: {groups_str}\n\nלאיזה תאריך? (✓ = יום אימון)",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(rows),
         )

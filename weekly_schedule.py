@@ -123,14 +123,24 @@ def day_name(d) -> str:
     return DAY_HE[d.weekday()]
 
 
-def today_branches() -> list[str]:
-    """Return list of branch names training today."""
-    return [s["branch"] for s in today_schedule()]
+def branches_for_date(d) -> list[str]:
+    """Return list of branch names training on a given date object."""
+    return [s["branch"] for s in SCHEDULE.get(d.weekday(), [])]
 
 
-def today_groups_for_branch(branch: str) -> list[dict]:
-    """Return list of {name, time} for a branch today."""
-    for s in today_schedule():
+def groups_for_branch_on_date(branch: str, d) -> list[dict]:
+    """Return list of {name, time} for a branch on a given date."""
+    for s in SCHEDULE.get(d.weekday(), []):
         if s["branch"] == branch:
             return s["groups"]
     return []
+
+
+def today_branches() -> list[str]:
+    from datetime import date
+    return branches_for_date(date.today())
+
+
+def today_groups_for_branch(branch: str) -> list[dict]:
+    from datetime import date
+    return groups_for_branch_on_date(branch, date.today())
