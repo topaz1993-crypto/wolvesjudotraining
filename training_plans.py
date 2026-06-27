@@ -277,12 +277,13 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = False
         d = _parse_date(cell)
         if d is None:
             return "nodate"
+        # last_filled_col is always orange — regardless of past/future
+        if col_idx == last_filled_col:
+            return "last"
         if d == today:
             return "today"
         if d > today:
             return "future"
-        if col_idx == last_filled_col:
-            return "last"
         return "past"
 
     group_blocks = _find_group_rows(rows[1:])  # skip header
@@ -570,19 +571,25 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     col_letter = _col_letter(col_0)
 
     rows = _read_tab(service, tab_name)
-    group_rows = _find_group_rows_for_group(rows, group)
+    all_group_rows = _find_group_rows_for_group(rows, group)
 
-    if not group_rows:
+    if not all_group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
-    # Smart mapping: let Claude assign each item to the right row type
-    mapped = smart_map_items(plan_items, len(group_rows))
+    # Skip the first row — it's the group header (has group name in col B)
+    # Content goes only to rows after the header
+    content_rows = all_group_rows[1:]
+    if not content_rows:
+        raise ValueError(f"אין שורות תוכן לקבוצה '{group}'")
+
+    # Smart mapping: let Claude assign each item to the right content row
+    mapped = smart_map_items(plan_items, len(content_rows))
 
     updates = []
     for i, item in enumerate(mapped):
         if not item:
             continue
-        row_1 = group_rows[i] + 1
+        row_1 = content_rows[i] + 1  # +1 = convert 0-indexed to sheet row number
         updates.append({
             "range": f"'{tab_name}'!{col_letter}{row_1}",
             "values": [[item]]
@@ -600,7 +607,7 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     # Save to archive
     try:
         import training_archive as _arc
-        content = {ROW_TYPES[i]: mapped[i] for i in range(len(mapped)) if i < len(ROW_TYPES) and mapped[i]}
+        content = {ROW_TYPES[i]: mapped[i] for i in range(len(mapped)) if i < len(ROW_TYPES) and mapped[i]}  # noqa: mapped refers to content_rows mapping
         _arc.save_plan(branch, tab_name, group, plan_date.isoformat(), content)
     except Exception:
         pass
