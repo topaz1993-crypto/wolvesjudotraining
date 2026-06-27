@@ -1064,40 +1064,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_plan_save":
         await query.answer()
-        sheets_sessions[user_id] = {"step": "pw_branch"}
+        # Grab plan text already saved by Claude (pending_plans)
+        plan_data = pending_plans.get(user_id, {})
+        plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
+        sheets_sessions[user_id] = {"step": "mg_pick_branch", "text": plan_text, "groups": []}
+        today_br = ws.today_branches()
+        rows = []
+        for b in tp.BRANCH_TABS:
+            marker = " ✓" if b in today_br else ""
+            rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
         await query.message.reply_text(
-            "💾 *שמור תוכנית אימון בגיליון*\n\nאיזה סניף?",
+            "💾 *שמור תוכנית אימון*\n\nאיזה סניף? (✓ = מתאמן היום)",
             parse_mode="Markdown",
-            reply_markup=_plan_branch_markup()
-        )
-        return
-
-    # ── Plan wizard — branch ──
-    if action.startswith("pw_branch|"):
-        await query.answer()
-        branch = action.split("|", 1)[1]
-        ss = sheets_sessions.get(user_id, {})
-        ss["branch"] = branch
-        ss["step"] = "pw_group"
-        sheets_sessions[user_id] = ss
-        await query.message.reply_text(
-            f"✅ {branch}\n\n👥 איזו קבוצה?",
-            reply_markup=_plan_group_markup(branch)
-        )
-        return
-
-    # ── Plan wizard — group ──
-    if action.startswith("pw_group|"):
-        await query.answer()
-        group = action.split("|", 1)[1]
-        ss = sheets_sessions.get(user_id, {})
-        ss["group"] = group
-        ss["step"] = "pw_date"
-        sheets_sessions[user_id] = ss
-        await query.message.reply_text(
-            f"✅ {group}\n\n📅 תאריך האימון? (לדוגמה: `26/6` או `היום`)",
-            parse_mode="Markdown",
-            reply_markup=cancel_button()
+            reply_markup=InlineKeyboardMarkup(rows)
         )
         return
 
