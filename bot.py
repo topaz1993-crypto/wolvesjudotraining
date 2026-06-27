@@ -26,6 +26,8 @@ import lyla_sheet as lyla
 import training_plans as tp
 import email_reader
 import payments_sheet
+import payments_report
+import dropout_detector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -553,6 +555,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+
+    # ─── Unpaid / payments callbacks ───
+    if action.startswith("unpaid_month|"):
+        await query.answer()
+        month = action.split("|", 1)[1]
+        await query.message.chat.send_action("typing")
+        msg = payments_report.format_unpaid_message(month)
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📱 הכן הודעת ווטסאפ", callback_data=f"unpaid_wa|{month}"),
+        ]])
+        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=markup)
+        return
+
+    if action.startswith("unpaid_wa|"):
+        await query.answer()
+        month = action.split("|", 1)[1]
+        unpaid_map = payments_report.get_unpaid(month)
+        students = unpaid_map.get(month, [])
+        if not students:
+            await query.message.reply_text("✅ אין חייבים!")
+            return
+        by_club: dict[str, list] = {}
+        for s in students:
+            by_club.setdefault(s["club"] or "לא ידוע", []).append(s["full_name"])
+        wa_lines = [f"שלום,\nתזכורת לתשלום דמי אימון עבור חודש {month}:\n"]
+        for club, names in sorted(by_club.items()):
+            wa_lines.append(f"📍 {club}:")
+            for n in sorted(names):
+                wa_lines.append(f"  • {n}")
+        wa_lines.append("\nניתן לשלם בקישור: https://private.invoice4u.co.il/Clearing/Invoice4UClearing.aspx?ProductId=4476&mobileApp=true")
+        wa_lines.append("\nתודה 🙏 — טופז")
+        await query.message.reply_text("\n".join(wa_lines))
+        return
 
     # ─── Payment approval callbacks ───
     if action.startswith("pay_approve|"):
@@ -1880,6 +1915,115 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Chat ID: `{cid}`\nUser ID: `{uid}`", parse_mode="Markdown")
 
 
+async def cmd_unpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/unpaid [חודש] — מי לא שילם."""
+    await update.message.chat.send_action("typing")
+    args = context.args
+    month = " ".join(args) if args else None
+
+    if month and month not in payments_report.MONTHS:
+        months_str = ", ".join(payments_report.MONTHS)
+        await update.message.reply_text(f"❌ חודש לא מוכר. אפשרויות: {months_str}")
+        return
+
+    if month:
+        msg = payments_report.format_unpaid_message(month)
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📱 הכן הודעת ווטסאפ", callback_data=f"unpaid_wa|{month}"),
+        ]])
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
+    else:
+        # Show month picker
+        rows = []
+        for i in range(0, len(payments_report.MONTHS), 3):
+            rows.append([
+                InlineKeyboardButton(m, callback_data=f"unpaid_month|{m}")
+                for m in payments_report.MONTHS[i:i+3]
+            ])
+        await update.message.reply_text(
+            "💰 *מי לא שילם?*\n\nבחר חודש:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+
+
+async def cmd_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/student <שם> — כרטיס ספורטאי."""
+    if not context.args:
+        await update.message.reply_text("שלח: `/student שם מלא`", parse_mode="Markdown")
+        return
+    await update.message.chat.send_action("typing")
+    name = " ".join(context.args)
+    s = payments_report.student_card(name)
+    if not s:
+        await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*", parse_mode="Markdown")
+        return
+    await update.message.reply_text(
+        payments_report.format_student_card(s),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/report — דו״ח חודשי מנהלי."""
+    await update.message.chat.send_action("typing")
+    try:
+        msg = payments_report.format_monthly_report()
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה: {e}")
+
+
+async def cmd_dropout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/dropout — ספורטאים שפספסו 3+ אימונים ברצף."""
+    await update.message.reply_text("⏳ סורק גיליונות נוכחות... זה עלול לקחת כ-30 שניות.")
+    await update.message.chat.send_action("typing")
+    try:
+        at_risk = dropout_detector.find_at_risk_students(consecutive=3)
+        msg = dropout_detector.format_at_risk_message(at_risk)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה: {e}")
+
+
+async def monthly_report_job(context):
+    """Background job — sends monthly financial report on the 1st of each month."""
+    if not TOPAZ_CHAT_ID:
+        return
+    today = datetime.now()
+    if today.day != 1:
+        return
+    try:
+        msg = payments_report.format_monthly_report()
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text=f"📊 *דו״ח חודשי אוטומטי — {today.strftime('%B %Y')}*\n\n" + msg,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        log.error("monthly_report_job error: %s", e)
+
+
+async def dropout_monitor_job(context):
+    """Background job — weekly dropout check."""
+    if not TOPAZ_CHAT_ID:
+        return
+    today = datetime.now()
+    if today.weekday() != 6:  # Sunday only
+        return
+    try:
+        at_risk = dropout_detector.find_at_risk_students(consecutive=3)
+        if at_risk:
+            msg = dropout_detector.format_at_risk_message(at_risk)
+            await context.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text=msg,
+                parse_mode="Markdown",
+            )
+    except Exception as e:
+        log.error("dropout_monitor_job error: %s", e)
+
+
 async def _belt_wizard_finish(message, user_id: str):
     """Generate belt ceremony WhatsApp message and add to calendar."""
     import datetime as _dt
@@ -3199,15 +3343,21 @@ def main():
     app.add_handler(CommandHandler("email", cmd_email))
     app.add_handler(CommandHandler("payments", cmd_payments))
     app.add_handler(CommandHandler("myid", cmd_myid))
+    app.add_handler(CommandHandler("unpaid", cmd_unpaid))
+    app.add_handler(CommandHandler("student", cmd_student))
+    app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("dropout", cmd_dropout))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    # Background email monitor — every 10 minutes
+    # Background jobs
     if TOPAZ_CHAT_ID:
-        app.job_queue.run_repeating(email_monitor_job, interval=600, first=60)
-        log.info("Email monitor started (every 10 min)")
+        app.job_queue.run_repeating(email_monitor_job,    interval=600,   first=60)
+        app.job_queue.run_repeating(monthly_report_job,   interval=86400, first=120)
+        app.job_queue.run_repeating(dropout_monitor_job,  interval=86400, first=180)
+        log.info("Background jobs started")
     else:
-        log.warning("TOPAZ_CHAT_ID not set — email monitor disabled")
+        log.warning("TOPAZ_CHAT_ID not set — background jobs disabled")
 
     log.info("Bot started...")
     app.run_polling()
