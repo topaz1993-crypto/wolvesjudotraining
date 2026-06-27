@@ -3867,13 +3867,15 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     # Background jobs
-    if TOPAZ_CHAT_ID:
-        app.job_queue.run_repeating(email_monitor_job,             interval=600,   first=60)
-        app.job_queue.run_repeating(monthly_report_job,            interval=86400, first=120)
-        app.job_queue.run_repeating(dropout_monitor_job,           interval=86400, first=180)
+    if TOPAZ_CHAT_ID and app.job_queue:
+        app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
+        app.job_queue.run_repeating(monthly_report_job,           interval=86400, first=120)
+        app.job_queue.run_repeating(dropout_monitor_job,          interval=86400, first=180)
         app.job_queue.run_repeating(daily_training_reminder_job,  interval=86400, first=60)
         app.job_queue.run_repeating(weekly_summary_job,           interval=86400, first=120)
         log.info("Background jobs started")
+    elif not app.job_queue:
+        log.warning("job_queue is None — install python-telegram-bot[job-queue] to enable background jobs")
     else:
         log.warning("TOPAZ_CHAT_ID not set — background jobs disabled")
 
