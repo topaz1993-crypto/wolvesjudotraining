@@ -47,6 +47,10 @@ _TODAY_CELL  = {"red": 1.00, "green": 0.96, "blue": 0.72}   # תא צהוב-קר
 _FUTURE_HDR  = {"red": 0.98, "green": 0.60, "blue": 0.12}   # כתום בינוני
 _FUTURE_CELL = {"red": 1.00, "green": 0.97, "blue": 0.84}   # קרם חם
 
+# עמודות ריקות / לא-תאריך — ניטרלי, לא כתום
+_EMPTY_HDR   = {"red": 0.85, "green": 0.85, "blue": 0.85}
+_EMPTY_CELL  = {"red": 0.96, "green": 0.96, "blue": 0.96}
+
 # קבוצות
 _GROUP_A     = {"red": 0.15, "green": 0.35, "blue": 0.58}
 _GROUP_B     = {"red": 0.22, "green": 0.44, "blue": 0.66}
@@ -241,13 +245,15 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     today = date_cls.today()
 
     def _col_type(col_idx: int) -> str:
-        """Return 'past', 'today', or 'future' for a date column."""
+        """Return 'past', 'today', 'future', or 'empty' for a date column."""
         if col_idx >= len(header):
-            return "future"
+            return "empty"
         cell = header[col_idx].strip()
+        if not cell:
+            return "empty"
         d = _parse_date(cell)
         if d is None:
-            return "future"
+            return "empty"   # non-date header (e.g. row-type label)
         if d < today:
             return "past"
         if d == today:
@@ -275,13 +281,15 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     requests.append(_col_width(sheet_id, 1, 2, 80))   # קבוצה
     if n_cols > 2:
         requests.append(_col_width(sheet_id, 2, n_cols, 120))
-    # Widen today's column and future columns for visibility
+    # Widen today's column and future columns for visibility; hide empty
     for c in range(2, n_cols):
         ctype = _col_type(c)
         if ctype == "today":
             requests.append(_col_width(sheet_id, c, c + 1, 150))
         elif ctype == "future":
             requests.append(_col_width(sheet_id, c, c + 1, 135))
+        elif ctype == "empty":
+            requests.append(_col_width(sheet_id, c, c + 1, 30))  # collapse empty cols
 
     # Row heights
     requests.append(_row_height(sheet_id, 0, n_rows, 34))
@@ -299,8 +307,10 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
             bg, txt, fsize = _PAST_HDR,   _WHITE, 10
         elif ctype == "today":
             bg, txt, fsize = _TODAY_HDR,  _WHITE, 12
-        else:
+        elif ctype == "future":
             bg, txt, fsize = _FUTURE_HDR, _WHITE, 11
+        else:  # empty / non-date
+            bg, txt, fsize = _EMPTY_HDR,  _BLACK, 10
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
             "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt},
@@ -331,7 +341,7 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                 "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "WRAP",
             }))
-            # date content cols — color by past/today/future
+            # date content cols — color by past/today/future/empty
             for c in range(2, n_cols):
                 ctype = _col_type(c)
                 if ctype == "past":
@@ -340,8 +350,11 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                 elif ctype == "today":
                     bg   = {"red": 1.00, "green": 0.98, "blue": 0.80} if row_alt else _TODAY_CELL
                     bold = True
-                else:
+                elif ctype == "future":
                     bg   = {"red": 1.00, "green": 0.99, "blue": 0.88} if row_alt else _FUTURE_CELL
+                    bold = False
+                else:  # empty
+                    bg   = _EMPTY_CELL
                     bold = False
                 requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
                     "backgroundColor": bg,
