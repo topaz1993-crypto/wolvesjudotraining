@@ -2190,9 +2190,70 @@ async def cmd_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/payments — הפעל בדיקת מיילים עכשיו."""
+    chat_id = update.effective_chat.id
     await update.message.reply_text("🔍 בודק מיילים חדשים...")
-    context.job_queue.run_once(email_monitor_job, when=0)
-    await update.message.reply_text("✅ הבדיקה הופעלה — אם יש תשלומים חדשים תקבל הודעה.")
+    await update.message.chat.send_action("typing")
+    try:
+        emails = email_reader.fetch_new_emails()
+        if not emails:
+            await update.message.reply_text("✅ אין מיילים חדשים לבדיקה.")
+            return
+        await update.message.reply_text(f"📬 נמצאו {len(emails)} מיילים — מנתח...")
+        for em in emails:
+            prompt = (
+                f"מייל שהתקבל:\nנושא: {em['subject']}\nמ: {em['sender']}\nתוכן:\n{em['body'][:1500]}\n\n"
+                "האם זה מייל שקשור לתשלום של ספורטאי ג'ודו? "
+                "אם כן, חלץ: שם הספורטאי, חודש התשלום, סכום. "
+                "השב בפורמט JSON בלבד:\n"
+                '{\"is_payment\": true, \"student_name\": \"שם\", \"month\": \"ספטמבר\", \"amount\": \"200\"}\n'
+                "אם לא קשור: {\"is_payment\": false}"
+            )
+            try:
+                import re as _re
+                resp = _claude.messages.create(
+                    model="claude-haiku-4-5-20251001", max_tokens=200,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                json_match = _re.search(r'\{.*\}', resp.content[0].text.strip(), _re.DOTALL)
+                if not json_match:
+                    email_reader.mark_skipped(em["id"]); continue
+                data = json.loads(json_match.group())
+            except Exception:
+                email_reader.mark_skipped(em["id"]); continue
+
+            if not data.get("is_payment"):
+                email_reader.mark_skipped(em["id"]); continue
+
+            student_name = data.get("student_name", "")
+            month        = data.get("month", "")
+            amount       = data.get("amount", "")
+            student      = payments_sheet.find_student(student_name) if student_name else None
+
+            key = f"pay_{em['id']}"
+            pending_payments[key] = {
+                "email_id": em["id"], "subject": em["subject"], "sender": em["sender"],
+                "student_name": student_name, "student": student, "month": month, "amount": amount,
+            }
+            if student:
+                current   = payments_sheet.get_month_value(student["row"], month)
+                paid_info = payments_sheet.payment_summary_row(student)
+                student_line = f"✅ נמצא: *{student['full_name']}* ({student['club']})"
+                current_line = f"ערך נוכחי ב{month}: {current or 'ריק'}\n{paid_info}"
+            else:
+                student_line = f"⚠️ לא נמצא ספורטאי: *{student_name}*"
+                current_line = ""
+            msg = (
+                f"💰 *מייל תשלום חדש*\n{student_line}\n"
+                f"חודש: {month} | סכום: {amount}₪\n"
+                f"מ: {em['sender']}\n{current_line}"
+            )
+            await context.bot.send_message(
+                chat_id=chat_id, text=msg, parse_mode="Markdown",
+                reply_markup=payment_approval_buttons(key)
+            )
+            email_reader.mark_seen(em["id"])
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה: {e}")
 
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
