@@ -11,12 +11,20 @@ DAY_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שב�
 SCHEDULE = {
     6: [  # ראשון — Sunday
         {
+            "branch": "חגור",
+            "tab":    "חגור",
+            "groups": [
+                {"name": "ד-ח",  "time": "15:15-16:30"},
+                {"name": "א-ג",  "time": "16:30-17:15"},
+                {"name": "גנים", "time": "17:15-18:00"},
+            ],
+        },
+        {
             "branch": "נווה ירק",
             "tab":    "נווה ירק",
             "groups": [
-                {"name": "ז-בוגרים", "time": "15:15-16:45"},
-                {"name": "ג-ו",      "time": "16:45-17:45"},
-                {"name": "א-ב",      "time": "17:45-18:30"},
+                {"name": "ג-ו",  "time": "16:45-17:45"},
+                {"name": "א-ב",  "time": "17:45-18:30"},
             ],
         },
     ],
@@ -134,6 +142,23 @@ def groups_for_branch_on_date(branch: str, d) -> list[dict]:
         if s["branch"] == branch:
             return s["groups"]
     return []
+
+
+def next_training_dates(branch: str, n: int = 5) -> list:
+    """
+    Return next n dates (as date objects) when branch has training.
+    Skips Saturday. Looks up to 60 days ahead.
+    """
+    from datetime import date, timedelta
+    results = []
+    d = date.today()
+    for _ in range(60):
+        if d.weekday() != 5 and branch in branches_for_date(d):  # 5 = Saturday
+            results.append(d)
+            if len(results) == n:
+                break
+        d += timedelta(days=1)
+    return results
 
 
 def today_branches() -> list[str]:

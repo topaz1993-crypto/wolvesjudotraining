@@ -436,19 +436,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from datetime import date as _date, timedelta as _td
 
             def _date_buttons_for_branch(b: str) -> list:
-                """7 days of buttons — ✓ marks days the branch actually trains."""
+                """Next 5 training dates for branch — skips Saturdays and non-training days."""
+                from datetime import date as _d2
+                today = _d2.today()
                 btns = []
-                today = _date.today()
-                for i in range(7):
-                    d = today + _td(days=i)
-                    trains = b in ws.branches_for_date(d)
-                    prefix = "✓ " if trains else ""
-                    if i == 0:
-                        label = f"{prefix}היום {d.day}/{d.month}"
-                    elif i == 1:
-                        label = f"{prefix}מחר {d.day}/{d.month}"
+                for d in ws.next_training_dates(b, n=5):
+                    diff = (d - today).days
+                    if diff == 0:
+                        prefix = "היום"
+                    elif diff == 1:
+                        prefix = "מחר"
                     else:
-                        label = f"{prefix}{ws.day_name(d)} {d.day}/{d.month}"
+                        prefix = ws.day_name(d)
+                    label = f"{prefix} {d.day}/{d.month}"
                     btns.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
                 return btns
 
@@ -688,18 +688,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ss["group"] = group
         ss["step"] = "plan_edit_date"
         sheets_sessions[user_id] = ss
-        from datetime import date as _date, timedelta as _td
+        branch_for_dates = ss.get("branch", "")
+        from datetime import date as _date
         today = _date.today()
-        days_he = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
+        dates = ws.next_training_dates(branch_for_dates, n=5) if branch_for_dates else []
         date_btns = []
-        for i in range(7):
-            d = today + _td(days=i)
-            label = f"{'היום' if i==0 else 'מחר' if i==1 else days_he[d.weekday()]} {d.day}/{d.month}"
-            date_btns.append(InlineKeyboardButton(label, callback_data=f"pe_date|{d.isoformat()}"))
+        for d in dates:
+            diff = (d - today).days
+            prefix = "היום" if diff == 0 else "מחר" if diff == 1 else ws.day_name(d)
+            date_btns.append(InlineKeyboardButton(
+                f"{prefix} {d.day}/{d.month}", callback_data=f"pe_date|{d.isoformat()}"
+            ))
         rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
         rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
         await query.edit_message_text(
-            f"✅ {ss['branch']} — {group}\n\nלאיזה תאריך?",
+            f"✅ {ss['branch']} — {group}\n\n5 תאריכי אימון קרובים:",
             reply_markup=InlineKeyboardMarkup(rows)
         )
         return
@@ -795,25 +798,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ss["branch"] = branch
         ss["step"] = "mg_pick_date"
         sheets_sessions[user_id] = ss
-        from datetime import date as _date, timedelta as _td
+        from datetime import date as _date
+        dates = ws.next_training_dates(branch, n=5)
         today = _date.today()
         date_options = []
-        for i in range(7):
-            d = today + _td(days=i)
-            trains = branch in ws.branches_for_date(d)
-            prefix = "✓ " if trains else ""
-            if i == 0:
-                label = f"{prefix}היום {d.day}/{d.month}"
-            elif i == 1:
-                label = f"{prefix}מחר {d.day}/{d.month}"
-            else:
-                label = f"{prefix}{ws.day_name(d)} {d.day}/{d.month}"
-            date_options.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
+        for d in dates:
+            diff = (d - today).days
+            prefix = "היום" if diff == 0 else "מחר" if diff == 1 else ws.day_name(d)
+            date_options.append(InlineKeyboardButton(
+                f"{prefix} {d.day}/{d.month}", callback_data=f"mg_date|{d.isoformat()}"
+            ))
         rows = [date_options[i:i+2] for i in range(0, len(date_options), 2)]
         rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
         groups_str = ", ".join(g["group"] for g in ss.get("groups", []))
         await query.edit_message_text(
-            f"✅ סניף: *{branch}*\nקבוצות: {groups_str}\n\nלאיזה תאריך? (✓ = יום אימון)",
+            f"✅ סניף: *{branch}*\nקבוצות: {groups_str}\n\n5 תאריכי אימון קרובים:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(rows),
         )
