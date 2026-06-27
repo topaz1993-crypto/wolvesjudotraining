@@ -244,8 +244,24 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     # ── Classify each date column as past / today / future ────────────────────
     today = date_cls.today()
 
+    # ── Find last DATE column that has ANY content in body rows ───────────────
+    # Only date-header columns are candidates — skip empty/non-date headers
+    last_filled_col = None
+    for c in range(n_cols - 1, 1, -1):
+        if c >= len(header):
+            continue
+        cell = header[c].strip()
+        if not cell or _parse_date(cell) is None:
+            continue
+        if any(c < len(row) and row[c].strip() for row in rows[1:]):
+            last_filled_col = c
+            break
+
     def _col_type(col_idx: int) -> str:
-        """Return 'past', 'today', 'future', or 'empty' for a date column."""
+        """
+        Return 'last', 'past', 'today', 'future', or 'empty' for a date column.
+        'last' = most recently filled column (orange even if past date).
+        """
         if col_idx >= len(header):
             return "empty"
         cell = header[col_idx].strip()
@@ -253,19 +269,15 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
             return "empty"
         d = _parse_date(cell)
         if d is None:
-            return "empty"   # non-date header (e.g. row-type label)
-        if d < today:
-            return "past"
+            return "empty"   # non-date header
         if d == today:
             return "today"
-        return "future"
-
-    # ── Find last column that has ANY content in body rows ─────────────────────
-    last_filled_col = None
-    for c in range(n_cols - 1, 1, -1):
-        if any(c < len(row) and row[c].strip() for row in rows[1:]):
-            last_filled_col = c
-            break
+        if d > today:
+            return "future"
+        # past date — check if it's the most recently filled column
+        if col_idx == last_filled_col:
+            return "last"
+        return "past"
 
     group_blocks = _find_group_rows(rows[1:])  # skip header
     # Adjust indices: rows[1:] offset
@@ -281,15 +293,15 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     requests.append(_col_width(sheet_id, 1, 2, 80))   # קבוצה
     if n_cols > 2:
         requests.append(_col_width(sheet_id, 2, n_cols, 120))
-    # Widen today's column and future columns for visibility; hide empty
+    # Column widths by type
     for c in range(2, n_cols):
         ctype = _col_type(c)
-        if ctype == "today":
+        if ctype in ("today", "last"):
             requests.append(_col_width(sheet_id, c, c + 1, 150))
         elif ctype == "future":
             requests.append(_col_width(sheet_id, c, c + 1, 135))
         elif ctype == "empty":
-            requests.append(_col_width(sheet_id, c, c + 1, 30))  # collapse empty cols
+            requests.append(_col_width(sheet_id, c, c + 1, 30))
 
     # Row heights
     requests.append(_row_height(sheet_id, 0, n_rows, 34))
@@ -305,11 +317,13 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
         ctype = _col_type(c)
         if ctype == "past":
             bg, txt, fsize = _PAST_HDR,   _WHITE, 10
+        elif ctype == "last":
+            bg, txt, fsize = _TODAY_HDR,  _WHITE, 12   # כתום בוהק — אימון אחרון
         elif ctype == "today":
             bg, txt, fsize = _TODAY_HDR,  _WHITE, 12
         elif ctype == "future":
             bg, txt, fsize = _FUTURE_HDR, _WHITE, 11
-        else:  # empty / non-date
+        else:  # empty
             bg, txt, fsize = _EMPTY_HDR,  _BLACK, 10
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
@@ -341,13 +355,13 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                 "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "WRAP",
             }))
-            # date content cols — color by past/today/future/empty
+            # date content cols — color by type
             for c in range(2, n_cols):
                 ctype = _col_type(c)
                 if ctype == "past":
                     bg   = {"red": 0.86, "green": 0.91, "blue": 0.97} if row_alt else _PAST_CELL
                     bold = False
-                elif ctype == "today":
+                elif ctype in ("today", "last"):
                     bg   = {"red": 1.00, "green": 0.98, "blue": 0.80} if row_alt else _TODAY_CELL
                     bold = True
                 elif ctype == "future":
