@@ -287,6 +287,15 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     # Adjust indices: rows[1:] offset
     group_blocks = [(g[0] + 1, g[1] + 1, g[2]) for g in group_blocks]
 
+    # Identify title rows: rows where A=שעה, B=group, C=group (inserted title rows)
+    title_rows = set()
+    for i, r in enumerate(rows[1:], start=1):
+        b = r[1].strip() if len(r) > 1 else ''
+        c = r[2].strip() if len(r) > 2 else ''
+        a = r[0].strip() if len(r) > 0 else ''
+        if a and b and b != 'קבוצה' and c == b:
+            title_rows.add(i)
+
     requests = []
 
     # Freeze
@@ -389,6 +398,32 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                     "wrapStrategy": "WRAP",
                 }))
 
+    # ── Group title rows (שורת שם קבוצה ייעודית) ─────────────────────────────
+    for idx, (g_start, g_end, group_name) in enumerate(group_blocks):
+        # The title row is one row before g_start (if it exists and is a title row)
+        title_row = g_start - 1
+        if title_row in title_rows:
+            g_color_title  = _GROUP_A      if idx % 2 == 0 else _GROUP_B
+            g_color_last   = _GROUP_LAST_A if idx % 2 == 0 else _GROUP_LAST_B
+            # Style: taller + bold centered text — blue for past cols, orange for last/today
+            requests.append(_row_height(sheet_id, title_row, title_row + 1, 30))
+            # Fixed cols A,B
+            requests.append(_repeat_cell(sheet_id, title_row, title_row + 1, 0, 2, {
+                "backgroundColor": g_color_title,
+                "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+            }))
+            # Date cols — match last/past coloring
+            for c in range(2, n_cols):
+                ctype = _col_type(c)
+                bg = g_color_last if ctype in ("last", "today") else g_color_title
+                requests.append(_repeat_cell(sheet_id, title_row, title_row + 1, c, c + 1, {
+                    "backgroundColor": bg,
+                    "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
+                    "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "CLIP",
+                }))
+
     # ── Borders ────────────────────────────────────────────────────────────────
     if n_rows > 0 and n_cols > 0:
         requests.append(_border_range(sheet_id, 0, n_rows, 0, n_cols))
@@ -401,6 +436,85 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
         ).execute()
 
     return deleted
+
+
+def add_group_title_rows(service, tab_name: str, sheet_id: int) -> int:
+    """
+    Insert a dedicated group-title row above each group block.
+    The new row has the group name written in every date column.
+    Returns number of rows inserted.
+    Already-titled sheets (rows where A='שעה' in col A but group name in date cols) are skipped.
+    """
+    rows = _read_tab(service, tab_name)
+    if not rows:
+        return 0
+
+    header = rows[0]
+    n_date_cols = max(len(r) for r in rows) - 2  # minus שעה and קבוצה
+
+    # Find group start rows (A has time, B has group name)
+    group_starts = []
+    for i, r in enumerate(rows[1:], start=1):
+        a = r[0].strip() if len(r) > 0 else ''
+        b = r[1].strip() if len(r) > 1 else ''
+        c = r[2].strip() if len(r) > 2 else ''
+        if a and b and b != 'קבוצה':
+            # Check if this row already has the group name in col C (title row)
+            # A title row has: A=שעה, B=group, C=group (repeated)
+            if c == b:
+                continue  # already titled
+            group_starts.append((i, a, b))
+
+    if not group_starts:
+        return 0
+
+    # Insert rows from bottom to top to preserve indices
+    insert_requests = []
+    for row_idx, time_val, group_name in reversed(group_starts):
+        insert_requests.append({
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx,
+                    "endIndex": row_idx + 1,
+                },
+                "inheritFromBefore": False,
+            }
+        })
+
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=SPREADSHEET_ID,
+        body={"requests": insert_requests}
+    ).execute()
+
+    # Re-read to get updated row positions
+    rows = _read_tab(service, tab_name)
+    n_cols = max(len(r) for r in rows)
+
+    # Write group name in each new title row
+    value_updates = []
+    group_starts_sorted = sorted(group_starts, key=lambda x: x[0])
+    offset = 0
+    for orig_idx, time_val, group_name in group_starts_sorted:
+        title_row_idx = orig_idx + offset  # shifted by previously inserted rows
+        row_1based = title_row_idx + 1  # 1-based for Sheets API
+
+        # Col A = time, Col B = group name, date cols = group name
+        row_data = [time_val, group_name] + [group_name] * (n_cols - 2)
+        value_updates.append({
+            "range": f"'{tab_name}'!A{row_1based}:{_col_letter(n_cols - 1)}{row_1based}",
+            "values": [row_data]
+        })
+        offset += 1
+
+    if value_updates:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"valueInputOption": "RAW", "data": value_updates}
+        ).execute()
+
+    return len(group_starts)
 
 
 def design_all_tabs(delete_empty: bool = True) -> str:
