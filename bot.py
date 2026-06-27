@@ -24,6 +24,8 @@ import calendar_tasks as cal
 import camp_sheet as camp
 import lyla_sheet as lyla
 import training_plans as tp
+import email_reader
+import payments_sheet
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 GMAIL_USER        = os.environ.get("GMAIL_USER", "topazjudo@gmail.com")
 GMAIL_APP_PASS    = os.environ.get("GMAIL_APP_PASS", "")
+TOPAZ_CHAT_ID     = os.environ.get("TOPAZ_CHAT_ID", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -81,6 +84,8 @@ training_log: dict = load_json(LOG_FILE, {})
 pending_plans: dict[str, str] = load_json(PENDING_FILE, {})
 # attendance_sessions[user_id] = active attendance session dict
 attendance_sessions: dict[str, dict] = {}
+# pending_payments[key] = {student, month, amount, email_id, subject, sender}
+pending_payments: dict[str, dict] = {}
 # sheets_sessions[user_id] = active camp/lyla flow session
 sheets_sessions: dict[str, dict] = {}
 # pending_belt_events[user_id] = {child_name, belt_color, ceremony_day}
@@ -548,6 +553,61 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+
+    # ─── Payment approval callbacks ───
+    if action.startswith("pay_approve|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        p = pending_payments.get(key)
+        if not p:
+            await query.edit_message_text("❌ לא נמצא המידע — אולי כבר טופל.")
+            return
+        student = p.get("student")
+        if not student:
+            await query.edit_message_text(
+                f"⚠️ לא מצאתי את הספורטאי *{p['student_name']}* בגיליון.\n"
+                "עדכן ידנית בגיליון התשלומים.",
+                parse_mode="Markdown"
+            )
+            pending_payments.pop(key, None)
+            return
+        try:
+            payments_sheet.update_payment(student["row"], p["month"], p["amount"])
+            await query.edit_message_text(
+                f"✅ *עודכן בדוח התשלומים!*\n\n"
+                f"• ספורטאי: {student['full_name']}\n"
+                f"• חודש: {p['month']}\n"
+                f"• סכום: {p['amount']}₪\n"
+                f"• מועדון: {student['club']}",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בעדכון: {e}")
+        pending_payments.pop(key, None)
+        return
+
+    if action.startswith("pay_reject|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        pending_payments.pop(key, None)
+        await query.edit_message_text("❌ נדחה — לא עודכן בדוח.")
+        return
+
+    if action.startswith("pay_edit|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        p = pending_payments.get(key)
+        if not p:
+            await query.edit_message_text("❌ לא נמצא המידע.")
+            return
+        sheets_sessions[user_id] = {"step": "pay_edit_input", "pay_key": key}
+        await query.message.reply_text(
+            f"✏️ שלח בפורמט: `שם מלא | חודש | סכום`\n"
+            f"לדוגמה: `{p['student_name']} | {p['month']} | {p['amount']}`",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
+        return
 
     # ─── Main menu callbacks ───
     if action == "noop":
@@ -1806,6 +1866,20 @@ async def cmd_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ שגיאה: {e}")
 
 
+async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/payments — הפעל בדיקת מיילים עכשיו."""
+    await update.message.reply_text("🔍 בודק מיילים חדשים...")
+    context.job_queue.run_once(email_monitor_job, when=0)
+    await update.message.reply_text("✅ הבדיקה הופעלה — אם יש תשלומים חדשים תקבל הודעה.")
+
+
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/myid — הצג את ה-chat ID שלך."""
+    cid = update.effective_chat.id
+    uid = update.effective_user.id
+    await update.message.reply_text(f"Chat ID: `{cid}`\nUser ID: `{uid}`", parse_mode="Markdown")
+
+
 async def _belt_wizard_finish(message, user_id: str):
     """Generate belt ceremony WhatsApp message and add to calendar."""
     import datetime as _dt
@@ -2363,6 +2437,33 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Payment edit input ────────────────────────────────────────────────────────
+    if step == "pay_edit_input":
+        key = ss.get("pay_key", "")
+        p = pending_payments.get(key)
+        parts = [x.strip() for x in text.split("|")]
+        if len(parts) < 3 or not p:
+            await update.message.reply_text("❌ פורמט לא תקין. נסה: `שם | חודש | סכום`", parse_mode="Markdown")
+            return True
+        name, month, amount = parts[0], parts[1], parts[2]
+        student = payments_sheet.find_student(name)
+        if not student:
+            await update.message.reply_text(f"⚠️ לא מצאתי ספורטאי בשם *{name}*. בדוק בגיליון ידנית.", parse_mode="Markdown")
+            sheets_sessions.pop(user_id, None)
+            pending_payments.pop(key, None)
+            return True
+        try:
+            payments_sheet.update_payment(student["row"], month, amount)
+            await update.message.reply_text(
+                f"✅ *עודכן!*\n• {student['full_name']} | {month} | {amount}₪",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה: {e}")
+        sheets_sessions.pop(user_id, None)
+        pending_payments.pop(key, None)
+        return True
 
     # ── Belt ceremony message ────────────────────────────────────────────────────
     # ── Plan wizard — date input ──────────────────────────────────────────────────
@@ -2963,6 +3064,118 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
     return False
 
 
+def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ אשר ועדכן בדוח", callback_data=f"pay_approve|{key}"),
+            InlineKeyboardButton("❌ דחה", callback_data=f"pay_reject|{key}"),
+        ],
+        [InlineKeyboardButton("✏️ שנה סכום/חודש", callback_data=f"pay_edit|{key}")],
+    ])
+
+
+async def email_monitor_job(context):
+    """Background job — runs every 10 min. Checks Gmail for new payment emails."""
+    if not TOPAZ_CHAT_ID:
+        return
+
+    emails = email_reader.fetch_new_emails()
+    if not emails:
+        return
+
+    for em in emails:
+        # Ask Claude if this is a payment-related email
+        prompt = (
+            f"מייל שהתקבל:\nנושא: {em['subject']}\nמ: {em['sender']}\nתוכן:\n{em['body'][:1500]}\n\n"
+            "האם זה מייל שקשור לתשלום של ספורטאי ג'ודו? "
+            "אם כן, חלץ: שם הספורטאי, חודש התשלום, סכום. "
+            "השב בפורמט JSON בלבד כך:\n"
+            '{\"is_payment\": true, \"student_name\": \"שם מלא\", \"month\": \"ספטמבר\", \"amount\": \"200\"}\n'
+            "אם לא קשור לתשלום: {\"is_payment\": false}"
+        )
+
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip()
+            # Extract JSON
+            import re as _re
+            json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            if not json_match:
+                email_reader.mark_skipped(em["id"])
+                continue
+            data = json.loads(json_match.group())
+        except Exception:
+            email_reader.mark_skipped(em["id"])
+            continue
+
+        if not data.get("is_payment"):
+            email_reader.mark_skipped(em["id"])
+            continue
+
+        student_name = data.get("student_name", "")
+        month        = data.get("month", "")
+        amount       = data.get("amount", "")
+
+        # Try to find student in sheet
+        student = payments_sheet.find_student(student_name) if student_name else None
+
+        key = f"pay_{em['id']}"
+        pending_payments[key] = {
+            "email_id":     em["id"],
+            "subject":      em["subject"],
+            "sender":       em["sender"],
+            "student_name": student_name,
+            "student":      student,
+            "month":        month,
+            "amount":       amount,
+        }
+
+        # Build approval message
+        if student:
+            current = payments_sheet.get_month_value(student["row"], month)
+            paid_info = payments_sheet.payment_summary_row(student)
+            student_line = f"✅ נמצא: *{student['full_name']}* (שורה {student['row']}, {student['club']})"
+            current_line = f"ערך נוכחי ב{month}: {current or 'ריק'}"
+            paid_line    = f"תשלומים קיימים: {paid_info}"
+        else:
+            student_line = f"⚠️ לא נמצא ספורטאי בשם *{student_name}* — בדוק ידנית"
+            current_line = ""
+            paid_line    = ""
+
+        msg_lines = [
+            "💰 *תשלום חדש זוהה במייל*",
+            f"",
+            f"📧 נושא: {em['subject'][:60]}",
+            f"👤 שולח: {em['sender'][:40]}",
+            f"",
+            f"📋 *מה זוהה:*",
+            f"• ספורטאי: {student_name}",
+            f"• חודש: {month}",
+            f"• סכום: {amount}₪",
+            f"",
+            student_line,
+        ]
+        if current_line:
+            msg_lines.append(current_line)
+        if paid_line:
+            msg_lines.append(paid_line)
+        msg_lines += ["", "האם לעדכן בדוח התשלומים?"]
+
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text="\n".join(msg_lines),
+            parse_mode="Markdown",
+            reply_markup=payment_approval_buttons(key),
+        )
+
+        # Mark as seen so we don't process it again
+        email_reader.mark_seen(em["id"])
+
+
 def main():
     # Clear undo file on startup — prevents stale undo buttons from prior run
     att.clear_dropout_undo()
@@ -2984,9 +3197,18 @@ def main():
     app.add_handler(CommandHandler("correction", correction_command))
     app.add_handler(CommandHandler("corrections", show_corrections_command))
     app.add_handler(CommandHandler("email", cmd_email))
+    app.add_handler(CommandHandler("payments", cmd_payments))
+    app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Background email monitor — every 10 minutes
+    if TOPAZ_CHAT_ID:
+        app.job_queue.run_repeating(email_monitor_job, interval=600, first=60)
+        log.info("Email monitor started (every 10 min)")
+    else:
+        log.warning("TOPAZ_CHAT_ID not set — email monitor disabled")
+
     log.info("Bot started...")
     app.run_polling()
 
