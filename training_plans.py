@@ -54,6 +54,10 @@ _EMPTY_CELL  = {"red": 0.96, "green": 0.96, "blue": 0.96}
 # קבוצות
 _GROUP_A     = {"red": 0.15, "green": 0.35, "blue": 0.58}
 _GROUP_B     = {"red": 0.22, "green": 0.44, "blue": 0.66}
+
+# גווני כתום לשורות קבוצה בעמודת "last"
+_GROUP_LAST_A = {"red": 0.75, "green": 0.32, "blue": 0.04}   # כתום כהה
+_GROUP_LAST_B = {"red": 0.85, "green": 0.42, "blue": 0.05}   # כתום בינוני-כהה
 _ROW_A       = {"red": 0.94, "green": 0.96, "blue": 1.00}
 _ROW_B       = {"red": 1.00, "green": 1.00, "blue": 1.00}
 
@@ -331,15 +335,26 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
 
     # ── Group blocks ───────────────────────────────────────────────────────────
     for idx, (g_start, g_end, _) in enumerate(group_blocks):
-        g_color = _GROUP_A if idx % 2 == 0 else _GROUP_B
+        g_color      = _GROUP_A      if idx % 2 == 0 else _GROUP_B
+        g_color_last = _GROUP_LAST_A if idx % 2 == 0 else _GROUP_LAST_B
 
-        # Group header row
+        # Group header row — split by column type so "last" cols get orange
+        # First apply blue across all cols, then override last/today cols
         requests.append(_repeat_cell(sheet_id, g_start, g_start + 1, 0, n_cols, {
             "backgroundColor": g_color,
             "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
             "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
             "wrapStrategy": "WRAP",
         }))
+        for c in range(2, n_cols):
+            ctype = _col_type(c)
+            if ctype in ("last", "today"):
+                requests.append(_repeat_cell(sheet_id, g_start, g_start + 1, c, c + 1, {
+                    "backgroundColor": g_color_last,
+                    "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
+                    "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP",
+                }))
 
         # Content rows
         for r in range(g_start + 1, g_end):
