@@ -375,7 +375,7 @@ def format_events_for_claude(events: list, date_from: date, date_to: date) -> st
             return "היום"
         if d == today + timedelta(days=1):
             return "מחר"
-        days = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+        days = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
         return f"יום {days[d.weekday()]} {d.strftime('%d/%m')}"
 
     by_date: dict[str, list] = {}

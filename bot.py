@@ -28,6 +28,7 @@ import email_reader
 import payments_sheet
 import payments_report
 import dropout_detector
+import weekly_schedule as ws
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -88,6 +89,8 @@ pending_plans: dict[str, str] = load_json(PENDING_FILE, {})
 attendance_sessions: dict[str, dict] = {}
 # pending_payments[key] = {student, month, amount, email_id, subject, sender}
 pending_payments: dict[str, dict] = {}
+# action_history[user_id] = list of {type, description, undo_fn_name, undo_data}
+action_history: dict[str, list] = {}
 # sheets_sessions[user_id] = active camp/lyla flow session
 sheets_sessions: dict[str, dict] = {}
 # pending_belt_events[user_id] = {child_name, belt_color, ceremony_day}
@@ -428,23 +431,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tp.is_multigroup_plan(user_text) and not sheets_sessions.get(user_id):
         branch, groups = tp.parse_multigroup_text(user_text)
         if groups:
+            # Auto-detect branch from today's schedule if not found in text
+            today_branches = ws.today_branches()
+            if not branch and len(today_branches) == 1:
+                branch = today_branches[0]
+
             sheets_sessions[user_id] = {
-                "step":    "mg_pick_branch",
-                "groups":  groups,
-                "text":    user_text,
-                "branch":  branch,
+                "step":   "mg_pick_branch",
+                "groups": groups,
+                "text":   user_text,
+                "branch": branch,
             }
             group_names = ", ".join(g["group"] for g in groups)
-            branch_line = f"סניף שזוהה: *{branch}*\n" if branch else ""
-            rows = []
-            for b in tp.BRANCH_TABS:
-                rows.append([InlineKeyboardButton(b, callback_data=f"mg_branch|{b}")])
-            rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
-            await update.message.reply_text(
-                f"🥋 *זיהיתי תוכנית לקבוצות:* {group_names}\n{branch_line}\nלאיזה סניף?",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(rows),
-            )
+            today_day = ws.today_name()
+
+            # If branch is clear from today's schedule — skip branch selection
+            if branch and branch in tp.BRANCH_TABS:
+                sheets_sessions[user_id]["step"] = "mg_pick_date"
+                from datetime import date as _date, timedelta as _td
+                today = _date.today()
+                date_btns = []
+                for i in range(7):
+                    d = today + _td(days=i)
+                    label = f"{'היום' if i==0 else 'מחר' if i==1 else ws.day_name(d)} {d.day}/{d.month}"
+                    date_btns.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
+                rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
+                rows.append([InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch"),
+                              InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+                await update.message.reply_text(
+                    f"🥋 *זיהיתי תוכנית — יום {today_day}*\n"
+                    f"קבוצות: {group_names}\n"
+                    f"סניף: *{branch}*\n\n"
+                    f"לאיזה תאריך?",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
+            else:
+                rows = []
+                for b in tp.BRANCH_TABS:
+                    marker = " ✓" if b in today_branches else ""
+                    rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
+                rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+                await update.message.reply_text(
+                    f"🥋 *זיהיתי תוכנית — יום {today_day}*\n"
+                    f"קבוצות: {group_names}\n\n"
+                    f"לאיזה סניף? (✓ = מתאמן היום)",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
             return
 
     DIRECT_PLAN_KW = ("E2MOM", "E1MOM", "EMOM", "Bench Press", "Pull-Ups", "Box Jumps",
@@ -495,6 +529,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "לדוגמה: `מתן שפר, ירוקה, שישי, סירקין, נבחרת, https://...`",
             parse_mode="Markdown",
             reply_markup=cancel_button()
+        )
+        return
+
+    # "בטל פעולה" → undo last action
+    UNDO_TRIGGERS = ("תבטל את זה", "תבטל פעולה", "בטל פעולה", "תבטל מה שעשית",
+                     "תחזיר", "תחזיר אחורה", "undo", "אני רוצה לבטל")
+    if any(t in user_text for t in UNDO_TRIGGERS):
+        history = action_history.get(user_id, [])
+        if not history:
+            await update.message.reply_text("❌ אין פעולה לביטול.")
+            return
+        last = history[-1]
+        await update.message.reply_text(
+            f"↩️ *הפעולה האחרונה:*\n{last['description']}\n\nלבטל?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ כן, בטל", callback_data="undo_last"),
+                InlineKeyboardButton("❌ לא", callback_data="cancel_flow"),
+            ]])
         )
         return
 
@@ -626,7 +679,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheets_sessions[user_id] = ss
         from datetime import date as _date, timedelta as _td
         today = _date.today()
-        days_he = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"]
+        days_he = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
         date_btns = []
         for i in range(7):
             d = today + _td(days=i)
@@ -656,6 +709,74 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ─── Multi-group plan callbacks ───
+    if action == "mg_change_branch":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        ss["step"] = "mg_pick_branch"
+        sheets_sessions[user_id] = ss
+        today_branches = ws.today_branches()
+        rows = []
+        for b in tp.BRANCH_TABS:
+            marker = " ✓" if b in today_branches else ""
+            rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"mg_branch|{b}")])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            "בחר סניף (✓ = מתאמן היום):",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    # ─── Undo last action ───
+    if action == "undo_last":
+        await query.answer()
+        history = action_history.get(user_id, [])
+        if not history:
+            await query.edit_message_text("❌ אין פעולה לביטול.")
+            return
+        last = history[-1]
+        undo_type = last["type"]
+        undo_data = last["undo_data"]
+
+        try:
+            if undo_type == "payment_update":
+                # Restore previous payment value
+                payments_sheet.update_payment(
+                    undo_data["row"], undo_data["month"], undo_data["prev_value"]
+                )
+                action_history[user_id].pop()
+                await query.edit_message_text(
+                    f"↩️ *בוטל!* תשלום {undo_data['student']} — {undo_data['month']} "
+                    f"שוחזר ל: {undo_data['prev_value'] or 'ריק'}",
+                    parse_mode="Markdown"
+                )
+            elif undo_type == "plan_save":
+                # Clear the plan cell (write empty string)
+                import training_plans as _tp
+                from datetime import date as _date
+                pd = _date.fromisoformat(undo_data["plan_date"])
+                _tp.save_plan_to_sheet(
+                    undo_data["branch"], undo_data["group"], pd,
+                    [""] * 6
+                )
+                action_history[user_id].pop()
+                await query.edit_message_text(
+                    f"↩️ *בוטל!* תוכנית {undo_data['branch']} — {undo_data['group']} "
+                    f"נמחקה מ-{pd.day}/{pd.month}",
+                    parse_mode="Markdown"
+                )
+            elif undo_type == "calendar_event":
+                cal.delete_event(undo_data["event_index"])
+                action_history[user_id].pop()
+                await query.edit_message_text(
+                    f"↩️ *בוטל!* אירוע יומן נמחק: {undo_data['title']}",
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(f"⚠️ לא ניתן לבטל פעולה מסוג: {undo_type}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בביטול: {e}")
+        return
+
     if action.startswith("mg_branch|"):
         await query.answer()
         branch = action.split("|", 1)[1]
@@ -669,7 +790,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         date_options = []
         for i in range(7):
             d = today + _td(days=i)
-            days_he = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"]
+            days_he = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
             label = f"{'היום' if i==0 else 'מחר' if i==1 else days_he[d.weekday()]} {d.day}/{d.month}"
             date_options.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
         rows = [date_options[i:i+2] for i in range(0, len(date_options), 2)]
@@ -695,14 +816,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון...")
         try:
             result = tp.save_multigroup_plan(branch, plan_date, groups)
+            for g in groups:
+                record_action(user_id, "plan_save",
+                    f"תוכנית {branch} {g['group']} {plan_date.day}/{plan_date.month}",
+                    {"branch": branch, "group": g["group"],
+                     "plan_date": plan_date.isoformat()}
+                )
             await query.message.reply_text(
                 f"✅ *נשמר בגיליון תוכניות אימון!*\n\n{result}",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "📋 פתח גיליון",
-                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"
-                    )
+                    InlineKeyboardButton("📋 פתח גיליון",
+                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"),
+                    InlineKeyboardButton("↩️ בטל", callback_data="undo_last"),
                 ]])
             )
         except Exception as e:
@@ -760,14 +886,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_payments.pop(key, None)
             return
         try:
+            prev = payments_sheet.get_month_value(student["row"], p["month"])
             payments_sheet.update_payment(student["row"], p["month"], p["amount"])
+            record_action(user_id, "payment_update",
+                f"תשלום {student['full_name']} {p['month']} {p['amount']}₪",
+                {"row": student["row"], "month": p["month"],
+                 "student": student["full_name"], "prev_value": prev}
+            )
             await query.edit_message_text(
                 f"✅ *עודכן בדוח התשלומים!*\n\n"
                 f"• ספורטאי: {student['full_name']}\n"
                 f"• חודש: {p['month']}\n"
                 f"• סכום: {p['amount']}₪\n"
                 f"• מועדון: {student['club']}",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=undo_button()
             )
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה בעדכון: {e}")
@@ -3422,6 +3555,25 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
         return True
 
     return False
+
+
+def record_action(user_id: str, action_type: str, description: str, undo_data: dict):
+    """Record an action for potential undo."""
+    history = action_history.setdefault(user_id, [])
+    history.append({
+        "type":        action_type,
+        "description": description,
+        "undo_data":   undo_data,
+        "timestamp":   datetime.now().isoformat(),
+    })
+    # Keep last 10 actions
+    action_history[user_id] = history[-10:]
+
+
+def undo_button() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("↩️ בטל פעולה אחרונה", callback_data="undo_last")
+    ]])
 
 
 def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
