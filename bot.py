@@ -825,10 +825,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_date = _date.fromisoformat(date_str)
         ss = sheets_sessions.pop(user_id, {})
         branch = ss.get("branch", "")
-        groups = ss.get("groups", [])
-        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}...")
+        plan_text = ss.get("text", "")
+        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
+        n_groups = len(sched_groups) if sched_groups else 1
+        await query.edit_message_text(f"⏳ שומר {n_groups} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}...")
         try:
-            result = tp.save_multigroup_plan(branch, plan_date, groups)
+            result = tp.save_full_day(branch, plan_date, plan_text)
             await query.message.reply_text(f"✅ *נשמר!*\n\n{result}", parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("📋 פתח גיליון",
@@ -891,16 +893,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+        plan_text = ss.get("text", "")
+        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
+        n_groups = len(sched_groups) if sched_groups else len(groups)
         sheets_sessions.pop(user_id, None)
-        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}...")
+        await query.edit_message_text(
+            f"⏳ שומר {n_groups} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}..."
+        )
         try:
-            result = tp.save_multigroup_plan(branch, plan_date, groups)
-            for g in groups:
-                record_action(user_id, "plan_save",
-                    f"תוכנית {branch} {g['group']} {plan_date.day}/{plan_date.month}",
-                    {"branch": branch, "group": g["group"],
-                     "plan_date": plan_date.isoformat()}
-                )
+            result = tp.save_full_day(branch, plan_date, plan_text)
+            record_action(user_id, "plan_save",
+                f"תוכנית {branch} {plan_date.day}/{plan_date.month} — כל הקבוצות",
+                {"branch": branch, "group": "all", "plan_date": plan_date.isoformat()}
+            )
             await query.message.reply_text(
                 f"✅ *נשמר בגיליון תוכניות אימון!*\n\n{result}",
                 parse_mode="Markdown",
