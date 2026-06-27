@@ -424,6 +424,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
 
     # Training plan detection — user sends plan directly
+    # ── Multi-group training plan detection ──────────────────────────────────────
+    if tp.is_multigroup_plan(user_text) and not sheets_sessions.get(user_id):
+        branch, groups = tp.parse_multigroup_text(user_text)
+        if groups:
+            sheets_sessions[user_id] = {
+                "step":    "mg_pick_branch",
+                "groups":  groups,
+                "text":    user_text,
+                "branch":  branch,
+            }
+            group_names = ", ".join(g["group"] for g in groups)
+            branch_line = f"סניף שזוהה: *{branch}*\n" if branch else ""
+            rows = []
+            for b in tp.BRANCH_TABS:
+                rows.append([InlineKeyboardButton(b, callback_data=f"mg_branch|{b}")])
+            rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+            await update.message.reply_text(
+                f"🥋 *זיהיתי תוכנית לקבוצות:* {group_names}\n{branch_line}\nלאיזה סניף?",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            return
+
     DIRECT_PLAN_KW = ("E2MOM", "E1MOM", "EMOM", "Bench Press", "Pull-Ups", "Box Jumps",
                       "Rope Climb", "DB Lunge", "Deadlift", "Squat", "Clean")
     if any(k.lower() in user_text.lower() for k in DIRECT_PLAN_KW) and not sheets_sessions.get(user_id):
@@ -555,6 +578,60 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+
+    # ─── Multi-group plan callbacks ───
+    if action.startswith("mg_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["branch"] = branch
+        ss["step"] = "mg_pick_date"
+        sheets_sessions[user_id] = ss
+        # Offer quick dates
+        from datetime import date as _date, timedelta as _td
+        today = _date.today()
+        date_options = []
+        for i in range(7):
+            d = today + _td(days=i)
+            days_he = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"]
+            label = f"{'היום' if i==0 else 'מחר' if i==1 else days_he[d.weekday()]} {d.day}/{d.month}"
+            date_options.append(InlineKeyboardButton(label, callback_data=f"mg_date|{d.isoformat()}"))
+        rows = [date_options[i:i+2] for i in range(0, len(date_options), 2)]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        groups_str = ", ".join(g["group"] for g in ss.get("groups", []))
+        await query.edit_message_text(
+            f"✅ סניף: *{branch}*\nקבוצות: {groups_str}\n\nלאיזה תאריך?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
+    if action.startswith("mg_date|"):
+        await query.answer()
+        from datetime import date as _date
+        date_str = action.split("|", 1)[1]
+        plan_date = _date.fromisoformat(date_str)
+        ss = sheets_sessions.get(user_id, {})
+        branch = ss.get("branch", "")
+        groups = ss.get("groups", [])
+        sheets_sessions.pop(user_id, None)
+
+        await query.edit_message_text(f"⏳ שומר {len(groups)} קבוצות לגיליון...")
+        try:
+            result = tp.save_multigroup_plan(branch, plan_date, groups)
+            await query.message.reply_text(
+                f"✅ *נשמר בגיליון תוכניות אימון!*\n\n{result}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "📋 פתח גיליון",
+                        url=f"googledrive://open?id=1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I"
+                    )
+                ]])
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה בשמירה: {e}")
+        return
 
     # ─── Unpaid / payments callbacks ───
     if action.startswith("unpaid_month|"):
@@ -2581,6 +2658,27 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Multi-group plan — manual date input ─────────────────────────────────────
+    if step == "mg_pick_date":
+        from datetime import date as _date
+        import re as _re
+        d_match = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        if d_match:
+            day, month = int(d_match.group(1)), int(d_match.group(2))
+            try:
+                plan_date = _date(_date.today().year, month, day)
+                branch = ss.get("branch", "")
+                groups = ss.get("groups", [])
+                sheets_sessions.pop(user_id, None)
+                await update.message.reply_text("⏳ שומר...")
+                result = tp.save_multigroup_plan(branch, plan_date, groups)
+                await update.message.reply_text(f"✅ *נשמר!*\n\n{result}", parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"❌ שגיאה: {e}")
+        else:
+            await update.message.reply_text("שלח תאריך בפורמט: 27/6")
+        return True
 
     # ── Payment edit input ────────────────────────────────────────────────────────
     if step == "pay_edit_input":

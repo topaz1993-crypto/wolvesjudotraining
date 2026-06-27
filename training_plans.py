@@ -447,3 +447,93 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
 
     date_str = f"{plan_date.day}/{plan_date.month}"
     return f"✅ נשמר בגיליון {tab_name} — {group} — {date_str} ({len(updates)} שורות)"
+
+
+def save_multigroup_plan(branch: str, plan_date, groups: list[dict]) -> str:
+    """
+    Save multiple groups at once.
+    groups = [{"group": "ד-ו", "items": ["חימום...", "תרגול...", ...]}, ...]
+    Returns summary string.
+    """
+    results = []
+    for g in groups:
+        try:
+            msg = save_plan_to_sheet(branch, g["group"], plan_date, g["items"])
+            results.append(msg)
+        except Exception as e:
+            results.append(f"❌ {g['group']}: {e}")
+    return "\n".join(results)
+
+
+def parse_multigroup_text(text: str) -> tuple:
+    """
+    Parse a multi-group training plan message.
+    Detects branch from context, extracts groups with their content lines.
+    Returns (branch_or_None, [{"group": ..., "time": ..., "items": [...]}, ...])
+    """
+    import re
+
+    groups = []
+    current_group = None
+
+    # Detect branch from text — prefer longer/more specific matches
+    branch = None
+    for b in sorted(BRANCH_TABS, key=len, reverse=True):
+        # Only match branch names that appear outside group context
+        if b in text and b not in ["נבחרת"]:  # נבחרת is also a group name
+            branch = b
+            break
+    if not branch and "נבחרת" in text and "סירקין" not in text:
+        branch = "נבחרת"
+
+    lines = text.splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Header line: contains ⏰ or 👥 or time pattern + group
+        time_match = re.search(r'(\d{1,2}:\d{2})', line)
+        group_match = re.search(
+            r'👥\s*\*?\*?([א-תa-zA-Z\d\-–— "\']+?)(?:\s*[\(\*]|$)', line
+        )
+
+        if time_match and ('👥' in line or '|' in line):
+            if current_group:
+                groups.append(current_group)
+            group_name = ""
+            if group_match:
+                group_name = group_match.group(1).strip().rstrip("*").strip()
+            # Clean up group name
+            group_name = re.sub(r'\s*[\(\[].*', '', group_name).strip()
+            current_group = {
+                "group": group_name,
+                "time":  time_match.group(1),
+                "items": [],
+            }
+            continue
+
+        # Content line
+        if current_group is not None:
+            # Skip "נושא:" prefix lines — use as first item
+            if line.startswith("נושא:"):
+                topic = line.replace("נושא:", "").strip()
+                if topic:
+                    current_group["items"].append(topic)
+            elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
+                item = re.sub(r'^[•\-\*]\s*', '', line).strip()
+                if item:
+                    current_group["items"].append(item)
+
+    if current_group:
+        groups.append(current_group)
+
+    return branch, groups
+
+
+def is_multigroup_plan(text: str) -> bool:
+    """Returns True if text looks like a multi-group training plan."""
+    import re
+    time_count = len(re.findall(r'⏰|👥|\d{1,2}:\d{2}\s*\|', text))
+    bullet_count = len(re.findall(r'^[•\-]', text, re.MULTILINE))
+    return time_count >= 2 and bullet_count >= 3
