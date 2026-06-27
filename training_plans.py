@@ -320,8 +320,8 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
             bg, txt, fsize = _TODAY_HDR,  _WHITE, 12
         elif ctype == "future":
             bg, txt, fsize = _FUTURE_HDR, _WHITE, 11
-        else:  # nodate → neutral, don't override existing header content
-            bg, txt, fsize = _WHITE,      _BLACK, 10
+        else:  # nodate → same as past (blue), consistent with other training columns
+            bg, txt, fsize = _PAST_HDR,   _WHITE, 10
         requests.append(_repeat_cell(sheet_id, 0, 1, c, c + 1, {
             "backgroundColor": bg,
             "textFormat": {"bold": True, "fontSize": fsize, "foregroundColor": txt},
@@ -364,8 +364,8 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
                 elif ctype == "future":
                     bg   = {"red": 1.00, "green": 0.99, "blue": 0.88} if row_alt else _FUTURE_CELL
                     bold = False
-                else:  # nodate → white, normal
-                    bg   = _WHITE
+                else:  # nodate → same blue as past
+                    bg   = {"red": 0.86, "green": 0.91, "blue": 0.97} if row_alt else _PAST_CELL
                     bold = False
                 requests.append(_repeat_cell(sheet_id, r, r + 1, c, c + 1, {
                     "backgroundColor": bg,
