@@ -4,10 +4,16 @@ Sheet ID: 1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I
 Structure: row1 = headers (שעה, קבוצה, date1, date2...), then group blocks with content rows.
 """
 
-import os, pickle, base64, warnings
+import os, pickle, base64, warnings, json
 from datetime import date as date_cls
 warnings.filterwarnings("ignore")
 import googleapiclient.discovery
+import anthropic
+
+_claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+# Row types in order — maps to the 6 rows of each group block in the sheet
+ROW_TYPES = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף"]
 
 SPREADSHEET_ID = "1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I"
 
@@ -408,6 +414,49 @@ def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
     return []
 
 
+def smart_map_items(items: list[str], n_rows: int) -> list[str]:
+    """
+    Use Claude to map free-text plan items to the correct sheet rows.
+    Returns list of n_rows strings (empty string = leave blank).
+    Row order: חימום, תרגול, קרבות, משחק, כוח, נוסף
+    """
+    if not items:
+        return [""] * n_rows
+
+    row_types = ROW_TYPES[:n_rows]
+    prompt = (
+        f"אתה עוזר לסדר תוכנית אימון ג'ודו לגיליון אקסל.\n"
+        f"יש {n_rows} שורות בסדר הבא: {', '.join(row_types)}\n\n"
+        f"פריטי התוכנית:\n"
+        + "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
+        + f"\n\nהשב JSON בלבד — מערך של בדיוק {n_rows} מחרוזות לפי סדר השורות.\n"
+        f"אם אין תוכן מתאים לשורה מסוימת — שים מחרוזת ריקה.\n"
+        f"אם יש כמה פריטים מאותו סוג — שלב אותם בשורה אחת.\n"
+        f"דוגמה: [\"חימום...\", \"תרגול...\", \"רנדורי 3:00\", \"משחק ציידים\", \"\", \"\"]"
+    )
+
+    try:
+        resp = _claude.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        import re
+        arr_match = re.search(r'\[.*\]', raw, re.DOTALL)
+        if arr_match:
+            mapped = json.loads(arr_match.group())
+            if isinstance(mapped, list):
+                # Pad or trim to n_rows
+                mapped = (mapped + [""] * n_rows)[:n_rows]
+                return [str(x) for x in mapped]
+    except Exception:
+        pass
+
+    # Fallback: sequential fill
+    return (items + [""] * n_rows)[:n_rows]
+
+
 def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]) -> str:
     """
     Write plan_items into the training plans sheet for the given branch/group/date.
@@ -428,8 +477,13 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     if not group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
+    # Smart mapping: let Claude assign each item to the right row type
+    mapped = smart_map_items(plan_items, len(group_rows))
+
     updates = []
-    for i, item in enumerate(plan_items[:len(group_rows)]):
+    for i, item in enumerate(mapped):
+        if not item:
+            continue
         row_1 = group_rows[i] + 1
         updates.append({
             "range": f"'{tab_name}'!{col_letter}{row_1}",

@@ -462,6 +462,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Plan sheet edit — natural language modification ───────────────────────────
+    PLAN_EDIT_TRIGGERS = (
+        "תשנה את", "תעדכן את", "תוסיף", "תחליף את", "הוסף", "שנה את",
+        "תעדכן בגיליון", "תשמור בגיליון", "עדכן בגיליון", "שמור לגיליון",
+    )
+    PLAN_EDIT_CONTEXT = ("חימום", "תרגול", "קרבות", "רנדורי", "משחק", "כוח", "אימון", "תוכנית")
+    if (any(t in user_text for t in PLAN_EDIT_TRIGGERS)
+            and any(c in user_text for c in PLAN_EDIT_CONTEXT)
+            and not sheets_sessions.get(user_id)):
+        sheets_sessions[user_id] = {"step": "plan_edit_who", "edit_text": user_text}
+        branch_rows = []
+        for b in tp.BRANCH_TABS:
+            branch_rows.append([InlineKeyboardButton(b, callback_data=f"pe_branch|{b}")])
+        branch_rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await update.message.reply_text(
+            "✏️ *עדכון תוכנית בגיליון*\n\nאיזה סניף?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(branch_rows),
+        )
+        return
+
     # Belt ceremony detection — any mention triggers calendar flow
     BELT_TRIGGERS = ("טקס חגורה", "טקס מעבר", "מעבר חגורה", "עבר חגורה", "עברה חגורה",
                      "עבר מבחן", "עברה מבחן", "עשה מבחן", "עשתה מבחן", "מבחן חגורה")
@@ -578,6 +599,61 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+
+    # ─── Plan edit callbacks ───
+    if action.startswith("pe_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["branch"] = branch
+        ss["step"] = "plan_edit_group"
+        sheets_sessions[user_id] = ss
+        groups = PLAN_GROUPS.get(branch, [])
+        rows = [[InlineKeyboardButton(g, callback_data=f"pe_group|{g}")] for g in groups]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            f"✅ {branch}\n\nאיזו קבוצה לעדכן?",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if action.startswith("pe_group|"):
+        await query.answer()
+        group = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        ss["group"] = group
+        ss["step"] = "plan_edit_date"
+        sheets_sessions[user_id] = ss
+        from datetime import date as _date, timedelta as _td
+        today = _date.today()
+        days_he = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"]
+        date_btns = []
+        for i in range(7):
+            d = today + _td(days=i)
+            label = f"{'היום' if i==0 else 'מחר' if i==1 else days_he[d.weekday()]} {d.day}/{d.month}"
+            date_btns.append(InlineKeyboardButton(label, callback_data=f"pe_date|{d.isoformat()}"))
+        rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            f"✅ {ss['branch']} — {group}\n\nלאיזה תאריך?",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if action.startswith("pe_date|"):
+        await query.answer()
+        from datetime import date as _date
+        plan_date = _date.fromisoformat(action.split("|", 1)[1])
+        ss = sheets_sessions.get(user_id, {})
+        ss["plan_date"] = plan_date.isoformat()
+        ss["step"] = "plan_edit_content"
+        sheets_sessions[user_id] = ss
+        await query.edit_message_text(
+            f"✅ {ss['branch']} — {ss['group']} — {plan_date.day}/{plan_date.month}\n\n"
+            f"שלח את תוכן האימון (שורות, כדורים, או טקסט חופשי).\n"
+            f"הבוט יסדר אוטומטית לחימום / תרגול / קרבות / משחק / כוח.",
+        )
+        return
 
     # ─── Multi-group plan callbacks ───
     if action.startswith("mg_branch|"):
@@ -2658,6 +2734,48 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Plan edit — content input ─────────────────────────────────────────────────
+    if step == "plan_edit_content":
+        import re as _re
+        from datetime import date as _date
+        branch    = ss.get("branch", "")
+        group     = ss.get("group", "")
+        plan_date = _date.fromisoformat(ss.get("plan_date", _date.today().isoformat()))
+        sheets_sessions.pop(user_id, None)
+
+        # Parse lines / bullets from text
+        items = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line = _re.sub(r'^[•\-\*\d\.]+\s*', '', line).strip()
+            if line:
+                items.append(line)
+
+        if not items:
+            await update.message.reply_text("❌ לא מצאתי תוכן. נסה שוב.")
+            return True
+
+        await update.message.reply_text(
+            f"⏳ Claude מסדר את התוכנית ושומר לגיליון..."
+        )
+        try:
+            result = tp.save_plan_to_sheet(branch, group, plan_date, items)
+            await update.message.reply_text(
+                f"✅ *נשמר!*\n{result}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "📋 פתח גיליון",
+                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"
+                    )
+                ]])
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה: {e}")
+        return True
 
     # ── Multi-group plan — manual date input ─────────────────────────────────────
     if step == "mg_pick_date":
