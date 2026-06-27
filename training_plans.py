@@ -229,34 +229,20 @@ def _freeze(sheet_id, rows=1, cols=2):
     }}
 
 
-def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True) -> int:
+def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = False) -> int:
     """
     Full design for one training-plan tab.
-    - Deletes empty date columns
-    - Highlights today's column in green
-    - Applies consistent styling to headers, group rows, content rows
-    Returns number of empty columns deleted.
+    - Highlights the last filled column in orange (most recent training)
+    - Past/future columns get their standard colors
+    - Never deletes columns
+    Returns 0 (kept for API compatibility).
     """
     rows = _read_tab(service, tab_name)
     if not rows:
         return 0
 
     header = rows[0]
-    today = date_cls.today()
-    today_str = f"{today.day}/{today.month}"
-
-    # ── Delete empty date columns ──────────────────────────────────────────────
     deleted = 0
-    if delete_empty:
-        empty_cols = _find_empty_date_cols(rows, header)
-        if empty_cols:
-            _delete_columns(service, sheet_id, empty_cols)
-            deleted = len(empty_cols)
-            # Re-read after deletion
-            rows = _read_tab(service, tab_name)
-            if not rows:
-                return deleted
-            header = rows[0]
 
     n_cols = max(len(r) for r in rows) if rows else 3
     n_rows = len(rows)
@@ -419,7 +405,7 @@ def design_tab(service, tab_name: str, sheet_id: int, delete_empty: bool = True)
     return deleted
 
 
-def design_all_tabs(delete_empty: bool = True) -> str:
+def design_all_tabs() -> str:
     """Design all training plan tabs. Returns summary string."""
     import time
     service = _get_service()
@@ -429,11 +415,8 @@ def design_all_tabs(delete_empty: bool = True) -> str:
     results = []
     for tab_name, sid in tabs:
         try:
-            deleted = design_tab(service, tab_name, sid, delete_empty)
-            msg = f"✅ {tab_name}"
-            if deleted:
-                msg += f" (נמחקו {deleted} עמודות ריקות)"
-            results.append(msg)
+            design_tab(service, tab_name, sid)
+            results.append(f"✅ {tab_name}")
         except Exception as e:
             results.append(f"❌ {tab_name}: {e}")
         time.sleep(1.5)  # avoid quota exceeded
