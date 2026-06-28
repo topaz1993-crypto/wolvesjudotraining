@@ -333,7 +333,22 @@ def get_events_range(date_from: date, date_to: date) -> list:
                 # Parse to sortable
                 try:
                     if "T" in start_str:
-                        dt = datetime.fromisoformat(start_str[:19])
+                        # Parse with timezone awareness and convert to Israel time (UTC+3)
+                        if start_str.endswith("Z"):
+                            dt_utc = datetime.fromisoformat(start_str[:19])
+                            dt = dt_utc + timedelta(hours=3)
+                        elif "+" in start_str[10:] or (len(start_str) > 19 and start_str[19] == "-"):
+                            # Has offset like +03:00 or -05:00 — parse offset manually
+                            naive = datetime.fromisoformat(start_str[:19])
+                            offset_str = start_str[19:]
+                            sign = 1 if offset_str[0] == "+" else -1
+                            parts = offset_str[1:].split(":")
+                            offset_h = int(parts[0]) if parts else 0
+                            offset_m = int(parts[1]) if len(parts) > 1 else 0
+                            utc = naive - timedelta(hours=sign * offset_h, minutes=sign * offset_m)
+                            dt = utc + timedelta(hours=3)  # to Israel
+                        else:
+                            dt = datetime.fromisoformat(start_str[:19])
                         time_display = dt.strftime("%H:%M")
                         date_display = dt.strftime("%d/%m")
                         sort_key = dt
