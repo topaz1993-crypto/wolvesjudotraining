@@ -277,7 +277,7 @@ def plan_buttons() -> InlineKeyboardMarkup:
 
 def approved_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💾 שמור בגיליון תוכניות", callback_data="save_to_sheet")],
+        [InlineKeyboardButton("💾 שמור בגיליון תוכניות", callback_data="menu_plan_save")],
         [InlineKeyboardButton("📋 תוכנית חדשה", callback_data="new_plan")],
     ])
 
@@ -640,7 +640,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         csv_content = reply[csv_start:csv_end].strip()
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
-        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום", "EMOM", "E2MOM", "E1MOM")
+        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום",
+                         "EMOM", "E2MOM", "E1MOM", "AMRAP", "טבאטה", "Tabata",
+                         "שליחים", "ג'ונגל", "ביסט", "עיר הקרח", "ג'ודופונג",
+                         "Bench", "Pull-up", "Rope Climb", "Box Jump")
         is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 2
 
         if is_training_plan:
