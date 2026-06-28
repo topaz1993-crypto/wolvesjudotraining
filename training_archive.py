@@ -137,17 +137,49 @@ def what_was_used_recently(branch: str, group: str, row_type: str, n: int = 3) -
 
 def suggest_context_for_claude(branch: str, groups: list) -> str:
     """
-    Build a context string for Claude with history per group.
-    Used when generating a new training plan suggestion.
+    Build a rich context string for Claude with:
+    1. Last 6 sessions per group (what NOT to repeat)
+    2. Full repertoire per row_type (all available options from history)
     """
-    lines = ["להלן היסטוריית האימונים האחרונים לכל קבוצה. השתמש בה כדי להציע תוכנית מגוונת:\n"]
+    ROW_TYPES = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף"]
+    all_records = _load()
+    lines = [
+        f"היסטוריית אימונים — {branch}",
+        "השתמש בנתונים אלה כדי לבנות תוכנית מגוונת: אל תחזור על מה שנעשה ב-6 האימונים האחרונים.",
+        "כתוב בסגנון של טופז — קצר, טכני, ישיר. ללא מספרים בתחילת שורה.\n"
+    ]
+
     for group in groups:
-        records = history_for_group(branch, group, n=3)
-        if not records:
-            lines.append(f"*{group}*: אין היסטוריה")
+        recs_all = [r for r in all_records
+                    if r.get("branch") == branch and r.get("group") == group]
+        if not recs_all:
+            lines.append(f"**{group}**: אין היסטוריה")
             continue
-        lines.append(f"*{group}*:")
-        for r in records:
-            items = ", ".join(f"{k}: {v}" for k, v in r["content"].items() if v)
-            lines.append(f"  {r['date']}: {items}")
+
+        recent = recs_all[-6:][::-1]  # last 6, newest first
+        lines.append(f"**{group}** ({len(recs_all)} אימונים בארכיון):")
+
+        # Recent sessions
+        lines.append("  6 אחרונים (אל תחזור על אלה):")
+        for r in recent:
+            row_summary = " | ".join(f"{k}: {v}" for k, v in r["content"].items() if v)
+            lines.append(f"    {r['date']}: {row_summary}")
+
+        # Full repertoire per row_type (all unique values ever used)
+        lines.append("  רפרטואר מלא לפי קטגוריה:")
+        for rt in ROW_TYPES:
+            used_recently = {r["content"].get(rt, "") for r in recent}
+            all_vals = list(dict.fromkeys(
+                r["content"].get(rt, "") for r in recs_all
+                if r["content"].get(rt)
+            ))
+            # Mark recently used
+            display = []
+            for v in all_vals:
+                mark = " ⚠️(לאחרונה)" if v in used_recently and v else ""
+                display.append(f"{v}{mark}")
+            if display:
+                lines.append(f"    {rt}: {' / '.join(display)}")
+        lines.append("")
+
     return "\n".join(lines)
