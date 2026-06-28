@@ -218,19 +218,29 @@ async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_da
         pass
 
     if branch and plan_date and ws.groups_for_branch_on_date(branch, plan_date):
-        # Store and ask for confirmation
-        import training_plans as _tp
-        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
-        group_names = ", ".join(g["name"] for g in sched_groups)
-        sheets_sessions[user_id] = {**ss, "branch": branch, "step": "mg_pick_date"}
+        # Build preview of what will be written
+        preview = tp.preview_plan(branch, plan_date, plan_text)
+        day_he = ws.day_name(plan_date)
+        sheets_sessions[user_id] = {**ss, "branch": branch, "step": "mg_pick_date",
+                                     "plan_date": plan_date.isoformat()}
+        lines = [f"💾 *תצוגה מקדימה — {branch} | {day_he} {plan_date.day}/{plan_date.month}*\n"]
+        if preview:
+            for g in preview:
+                time_str = f" ({g['time']})" if g.get("time") else ""
+                lines.append(f"*{g['group']}*{time_str}:")
+                if g["rows"]:
+                    for rt, val in g["rows"]:
+                        lines.append(f"  {rt}: {val}")
+                else:
+                    lines.append("  ⚠️ אין תוכן")
+                lines.append("")
+        else:
+            lines.append("⚠️ לא נמצאו קבוצות לשמירה")
         await update.message.reply_text(
-            f"💾 *שמור תוכנית*\n"
-            f"סניף: *{branch}* | {plan_date.day}/{plan_date.month}\n"
-            f"קבוצות: {group_names}\n\n"
-            f"לשמור?",
+            "\n".join(lines).strip(),
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ כן, שמור {plan_date.day}/{plan_date.month}",
+                [InlineKeyboardButton(f"✅ שמור עכשיו",
                                       callback_data=f"mg_date|{plan_date.isoformat()}"),
                  InlineKeyboardButton("🔄 שנה סניף", callback_data="mg_change_branch")],
                 [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
@@ -495,17 +505,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     user_id = str(update.effective_user.id)
 
-    # ── "לא שמר" / "תשמור" — re-offer save from pending_plans ──────────────────
-    SAVE_RETRY_TRIGGERS = ("לא שמר", "לא נשמר", "תשמור", "שמור עכשיו", "לשמור", "שמור את זה")
-    if any(t in user_text for t in SAVE_RETRY_TRIGGERS) and pending_plans.get(user_id):
-        plan_data = pending_plans[user_id]
+    # ── אישור / שמירה מחדש — מ-pending_plans ────────────────────────────────────
+    SAVE_TRIGGERS = ("לא שמר", "לא נשמר", "תשמור", "שמור עכשיו", "לשמור", "שמור את זה",
+                     "מאשר", "אשר", "כן שמור", "שמור", "סבבה")
+    _plan_data = pending_plans.get(user_id)
+    if any(t in user_text for t in SAVE_TRIGGERS) and _plan_data:
+        plan_data = _plan_data
         plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
         original_text = plan_data.get("original", "") if isinstance(plan_data, dict) else ""
-        branch, plan_date = tp.detect_branch_and_date(original_text)
+        # prefer stored branch/date, then detect from original, then from reply
+        branch = (plan_data.get("branch") if isinstance(plan_data, dict) else None)
+        plan_date_iso = (plan_data.get("plan_date") if isinstance(plan_data, dict) else None)
+        from datetime import date as _dt
+        plan_date = _dt.fromisoformat(plan_date_iso) if plan_date_iso else None
         if not branch or not plan_date:
-            b2, d2 = tp.detect_branch_and_date(plan_text)
+            b2, d2 = tp.detect_branch_and_date(original_text)
             branch = branch or b2
             plan_date = plan_date or d2
+        if not branch or not plan_date:
+            b3, d3 = tp.detect_branch_and_date(plan_text)
+            branch = branch or b3
+            plan_date = plan_date or d3
         await _plan_offer_save(update, user_id, plan_text, branch, plan_date)
         return
 
@@ -660,7 +680,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 2
 
         if is_training_plan:
-            pending_plans[user_id] = {"reply": reply, "original": user_text}
+            # Detect branch+date from original request and store — so save works even
+            # if user types "מאשר" or "שמור" without clicking the button
+            _b, _d = tp.detect_branch_and_date(user_text)
+            pending_plans[user_id] = {
+                "reply": reply,
+                "original": user_text,
+                "branch": _b or "",
+                "plan_date": _d.isoformat() if _d else "",
+            }
             save_json(PENDING_FILE, pending_plans)
 
         save_plan_markup = InlineKeyboardMarkup([
@@ -911,6 +939,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
         n_groups = len(sched_groups) if sched_groups else len(groups)
         sheets_sessions.pop(user_id, None)
+
+        # Build preview for verification later
+        preview = tp.preview_plan(branch, plan_date, plan_text)
+
         await query.edit_message_text(
             f"⏳ שומר {n_groups} קבוצות לגיליון — {branch} {plan_date.day}/{plan_date.month}..."
         )
@@ -920,12 +952,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"תוכנית {branch} {plan_date.day}/{plan_date.month} — כל הקבוצות",
                 {"branch": branch, "group": "all", "plan_date": plan_date.isoformat()}
             )
+
+            # Verify what was actually written
+            verify = tp.verify_plan_saved(branch, plan_date, preview)
+            if verify:
+                ver_lines = ["📋 *מה נכתב בפועל:*"]
+                all_ok = True
+                for v in verify:
+                    if v["written"]:
+                        ver_lines.append(f"✅ *{v['group']}*: " +
+                            " | ".join(val for _, val in v["written"]))
+                    else:
+                        ver_lines.append(f"⚠️ *{v['group']}*: לא נכתב כלום")
+                        all_ok = False
+                confirm_text = "\n".join(ver_lines)
+            else:
+                confirm_text = result
+                all_ok = "✅" in result
+
+            from training_plans import SPREADSHEET_ID
+            sheet_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit"
             await query.message.reply_text(
-                f"✅ *נשמר בגיליון תוכניות אימון!*\n\n{result}",
+                f"{'✅' if all_ok else '⚠️'} *{branch} {plan_date.day}/{plan_date.month}*\n\n{confirm_text}",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📋 פתח גיליון",
-                        url="https://docs.google.com/spreadsheets/d/1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I/edit"),
+                    InlineKeyboardButton("📋 פתח גיליון", url=sheet_url),
                     InlineKeyboardButton("↩️ בטל", callback_data="undo_last"),
                 ]])
             )

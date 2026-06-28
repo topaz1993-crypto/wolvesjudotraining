@@ -771,6 +771,77 @@ def detect_branch_and_date(text: str):
     return branch, plan_date
 
 
+def preview_plan(branch: str, plan_date, plan_text: str) -> list[dict]:
+    """
+    Parse plan without saving. Returns list of:
+      {"group": name, "time": time, "rows": [(row_type, value), ...]}
+    Returns empty list if no groups found.
+    """
+    import weekly_schedule as _ws
+    sched_groups = _ws.groups_for_branch_on_date(branch, plan_date)
+    if not sched_groups:
+        return []
+    sections = _split_plan_into_sections(plan_text, sched_groups)
+    tab_name = BRANCH_TABS.get(branch)
+    result = []
+    for group_info, items in sections:
+        n_rows = None
+        if tab_name:
+            try:
+                svc = _get_service()
+                rows = _read_tab(svc, tab_name)
+                grp_rows = _find_group_rows_for_group(rows, group_info["name"])
+                n_rows = len(grp_rows) if grp_rows else None
+            except Exception:
+                pass
+        if n_rows is None:
+            n_rows = 4 if branch in ("איפון פייט",) else (3 if branch == "פונקציונלי" else 6)
+        mapped = smart_map_items(items, n_rows, branch=branch)
+        row_types = ROW_TYPES[:n_rows]
+        rows_preview = [(rt, val) for rt, val in zip(row_types, mapped) if val]
+        result.append({
+            "group": group_info["name"],
+            "time":  group_info.get("time", ""),
+            "rows":  rows_preview,
+        })
+    return result
+
+
+def verify_plan_saved(branch: str, plan_date, preview: list[dict]) -> list[dict]:
+    """
+    Read back from sheet what was actually saved. Returns list of:
+      {"group": name, "ok": bool, "written": [(row_type, value), ...]}
+    """
+    import weekly_schedule as _ws
+    tab_name = BRANCH_TABS.get(branch)
+    if not tab_name:
+        return []
+    try:
+        svc = _get_service()
+        col_0 = _find_or_create_date_col(svc, tab_name, plan_date)
+        rows = _read_tab(svc, tab_name)
+        verify_results = []
+        for g in preview:
+            grp_rows = _find_group_rows_for_group(rows, g["group"])
+            n_rows = len(grp_rows) if grp_rows else 0
+            row_types = ROW_TYPES[:n_rows]
+            written = []
+            for i, rt in enumerate(row_types):
+                row_idx = grp_rows[i] if i < len(grp_rows) else -1
+                val = ""
+                if row_idx >= 0 and row_idx < len(rows):
+                    row = rows[row_idx]
+                    val = row[col_0] if col_0 < len(row) else ""
+                if val:
+                    written.append((rt, val))
+            expected_count = len(g["rows"])
+            ok = len(written) >= expected_count and expected_count > 0
+            verify_results.append({"group": g["group"], "ok": ok, "written": written})
+        return verify_results
+    except Exception:
+        return []
+
+
 def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     """
     Save a full training day plan for a branch.
