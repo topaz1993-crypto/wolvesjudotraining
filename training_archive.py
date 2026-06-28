@@ -135,19 +135,45 @@ def what_was_used_recently(branch: str, group: str, row_type: str, n: int = 3) -
     return [r["content"].get(row_type, "") for r in records if r["content"].get(row_type)]
 
 
+BRANCH_ROW_TYPES = {
+    "איפון פייט": ["חימום", "תרגול", "קרבות", "משחק"],
+    "פונקציונלי": ["חימום", "תרגול", "קרבות", "כוח"],
+}
+DEFAULT_ROW_TYPES = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף"]
+
+BRANCH_STYLE_NOTES = {
+    "איפון פייט": (
+        "⚠️ איפון פייט — לא ג'ודו טכני! "
+        "חימום=משחק פעיל, תרגול=טבאטה ספוטיפיי, קרבות=משחק תחרותי (ג'ודופונג/עיר הקרח/ביסט גיימס), "
+        "משחק=סיום קצר. ללא הפלות, ללא רנדורי."
+    ),
+    "פונקציונלי": (
+        "⚠️ פונקציונלי — CrossFit, לא ג'ודו! "
+        "חימום=Warm-up, תרגול=Strength (E2MOM/E3MOM עם משקולות), קרבות=Metcon (AMRAP/EMOM). "
+        "כתוב באנגלית+עברית. ללא ג'ודו."
+    ),
+}
+
+
 def suggest_context_for_claude(branch: str, groups: list) -> str:
     """
     Build a rich context string for Claude with:
     1. Last 6 sessions per group (what NOT to repeat)
     2. Full repertoire per row_type (all available options from history)
     """
-    ROW_TYPES = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף"]
+    row_types = BRANCH_ROW_TYPES.get(branch, DEFAULT_ROW_TYPES)
     all_records = _load()
+    style_note = BRANCH_STYLE_NOTES.get(branch, "")
     lines = [
         f"היסטוריית אימונים — {branch}",
+    ]
+    if style_note:
+        lines.append(style_note)
+    lines += [
         "השתמש בנתונים אלה כדי לבנות תוכנית מגוונת: אל תחזור על מה שנעשה ב-6 האימונים האחרונים.",
         "כתוב בסגנון של טופז — קצר, טכני, ישיר. ללא מספרים בתחילת שורה.\n"
     ]
+    ROW_TYPES = row_types
 
     for group in groups:
         recs_all = [r for r in all_records
