@@ -905,8 +905,10 @@ def apply_sheet_design(branch: str, group: str):
             }},
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
         }})
+        # Safety: never paint NAVY on student rows — clamp to student_start_0 - 1
+        safe_header_end = min(header_row_0 + 1, student_start_0)
         req.append({"repeatCell": {
-            "range": {"sheetId": sheet_id, "startRowIndex": header_row_0, "endRowIndex": header_row_0 + 1,
+            "range": {"sheetId": sheet_id, "startRowIndex": header_row_0, "endRowIndex": safe_header_end,
                        "startColumnIndex": 0, "endColumnIndex": last_col},
             "cell": {"userEnteredFormat": {
                 "backgroundColor": _NAVY,
@@ -916,7 +918,7 @@ def apply_sheet_design(branch: str, group: str):
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
         }})
         req.append({"repeatCell": {
-            "range": {"sheetId": sheet_id, "startRowIndex": header_row_0, "endRowIndex": header_row_0 + 1,
+            "range": {"sheetId": sheet_id, "startRowIndex": header_row_0, "endRowIndex": safe_header_end,
                        "startColumnIndex": first_att_col_0, "endColumnIndex": last_col},
             "cell": {"userEnteredFormat": {
                 "backgroundColor": _DATE_BG,
