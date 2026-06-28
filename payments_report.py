@@ -3,6 +3,7 @@ Payments report utilities — who hasn't paid, student card, monthly summary.
 """
 
 import os
+from typing import Optional
 import base64
 import pickle
 import warnings
@@ -91,7 +92,7 @@ def get_unpaid_by_club(month: str = None) -> dict[str, dict[str, list]]:
     return by_club
 
 
-def student_card(name: str) -> dict | None:
+def student_card(name: str) -> Optional[dict]:
     """Full student info by name (fuzzy match)."""
     students = load_all_students()
     full_names = [s["full_name"] for s in students]

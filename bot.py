@@ -23,6 +23,7 @@ import absence_tracker as abt
 import calendar_tasks as cal
 import camp_sheet as camp
 import lyla_sheet as lyla
+import competitions_sheet as comp_sheet
 import training_plans as tp
 import email_reader
 import payments_sheet
@@ -30,6 +31,7 @@ import payments_report
 import dropout_detector
 import weekly_schedule as ws
 import training_archive as arc
+import contacts as contacts_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -359,48 +361,71 @@ def _hdr(text: str) -> list:
 
 def main_menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+
         # ── יומן ──
-        _hdr("─────  📅 יומן  ─────"),
+        _hdr("━━━━  📅 יומן  ━━━━"),
         [
-            InlineKeyboardButton("היום",    callback_data="menu_today"),
-            InlineKeyboardButton("מחר",     callback_data="menu_tomorrow"),
-            InlineKeyboardButton("השבוע",   callback_data="menu_week"),
-            InlineKeyboardButton("החודש",   callback_data="menu_month"),
+            InlineKeyboardButton("📅 היום",   callback_data="menu_today"),
+            InlineKeyboardButton("📅 מחר",    callback_data="menu_tomorrow"),
+        ],
+        [
+            InlineKeyboardButton("📅 השבוע",  callback_data="menu_week"),
+            InlineKeyboardButton("📅 החודש",  callback_data="menu_month"),
         ],
         [InlineKeyboardButton("➕ הוסף אירוע ליומן", callback_data="menu_cal_add")],
 
         # ── נוכחות ──
-        _hdr("─────  ✅ נוכחות  ─────"),
-        [InlineKeyboardButton("סמן נוכחות", callback_data="menu_attendance")],
-
-        # ── אימון ──
-        _hdr("─────  🥋 תוכנית אימון  ─────"),
+        _hdr("━━━━  ✅ נוכחות  ━━━━"),
         [
-            InlineKeyboardButton("🥋 בנה תוכנית", callback_data="menu_plan"),
-            InlineKeyboardButton("💾 שמור תוכנית", callback_data="menu_plan_save"),
+            InlineKeyboardButton("✅ סמן נוכחות",   callback_data="menu_attendance"),
+            InlineKeyboardButton("📊 דוח נוכחות",   callback_data="menu_absence_report"),
         ],
+
+        # ── תוכנית אימון ──
+        _hdr("━━━━  🥋 תוכנית אימון  ━━━━"),
+        [
+            InlineKeyboardButton("🥋 בנה תוכנית",         callback_data="menu_plan"),
+            InlineKeyboardButton("📅 יום מלא לסניף",      callback_data="menu_fullday"),
+        ],
+        [
+            InlineKeyboardButton("💾 שמור תוכנית",        callback_data="menu_plan_save"),
+            InlineKeyboardButton("📚 ארכיון תוכניות",     callback_data="menu_archive"),
+        ],
+
+        # ── תשלומים והורים ──
+        _hdr("━━━━  💰 תשלומים והורים  ━━━━"),
+        [
+            InlineKeyboardButton("💰 מי לא שילם",        callback_data="menu_unpaid"),
+            InlineKeyboardButton("📱 הודעות להורים",      callback_data="menu_parent_msgs"),
+        ],
+        [InlineKeyboardButton("📧 בדוק מיילים תשלום",   callback_data="menu_check_emails")],
 
         # ── גיליונות ──
-        _hdr("─────  📂 גיליונות  ─────"),
+        _hdr("━━━━  📂 גיליונות  ━━━━"),
         [
-            InlineKeyboardButton("📂 פתח גיליון",     callback_data="menu_open_sheet"),
-            InlineKeyboardButton("🎨 עיצוב גיליון",   callback_data="menu_design"),
+            InlineKeyboardButton("📂 פתח גיליון",        callback_data="menu_open_sheet"),
+            InlineKeyboardButton("🎨 עיצוב גיליונות",    callback_data="menu_design"),
         ],
-        [InlineKeyboardButton("🧹 נקה עמודות ריקות",  callback_data="menu_cleanup")],
+        [InlineKeyboardButton("🧹 נקה עמודות ריקות",     callback_data="menu_cleanup")],
 
         # ── פרויקטים ──
-        _hdr("─────  🏕️ פרויקטים  ─────"),
+        _hdr("━━━━  🏕 פרויקטים  ━━━━"),
         [
-            InlineKeyboardButton("🏕️ מחנה קיץ",  callback_data="menu_camp"),
-            InlineKeyboardButton("🌙 לילה יפני",  callback_data="menu_lyla"),
+            InlineKeyboardButton("🏕 מחנה קיץ",   callback_data="menu_camp"),
+            InlineKeyboardButton("🌙 לילה יפני",   callback_data="menu_lyla"),
+        ],
+        [
+            InlineKeyboardButton("🏆 תחרויות",    callback_data="menu_competitions"),
+            InlineKeyboardButton("📝 הרשמה",       callback_data="menu_open_sheet"),
         ],
 
         # ── נוסף ──
-        _hdr("─────  🥇 נוסף  ─────"),
+        _hdr("━━━━  🥇 נוסף  ━━━━"),
         [
             InlineKeyboardButton("🥇 חגורות",      callback_data="menu_belts"),
-            InlineKeyboardButton("📊 סטטיסטיקות",  callback_data="menu_stats"),
+            InlineKeyboardButton("📊 סטטיסטיקות", callback_data="menu_stats"),
         ],
+        [InlineKeyboardButton("📱 אנשי קשר",       callback_data="menu_contacts")],
     ])
 
 
@@ -434,22 +459,29 @@ def _sheet_url(sheet_id: str) -> str:
     return f"googledrive://open?id={sheet_id}"
 
 SHEET_LINKS = {
+    # נוכחות
     "נוכחות סירקין":     _sheet_url("1L0mcnpBPW4_3nsxaMy3EunQuOHPjWejvL1Wb6SGzltQ"),
     "נוכחות חגור":       _sheet_url("18p087VLNCRqPOhGbDzUeEg4YIHatiCfSc7v8NVFEPHA"),
     "נוכחות נווה ירק":   _sheet_url("1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU"),
     "נוכחות אהרונוביץ":  _sheet_url("1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E"),
     "נוכחות פונקציונלי": _sheet_url("1LYqia2ESkLY0HD8QA0vkg1xxqLI5qx0nY9CVVj5MGGY"),
+    # תוכניות
     "תוכניות אימון":     _sheet_url("1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I"),
-    "מחנה קיץ":          _sheet_url("1hC9CZbXaFCUGvNHE96YVjv0HbEf4C5S_D4JOJFe1B4c"),
-    "לילה יפני":         _sheet_url("1UMGrSnPcWp9lHX6DaaSt07ICNDUGEhk4O5v7L0hEsas"),
+    "תוכניות 24-25":     _sheet_url("1TTQCzEB-8aw4qrQDsh83IfMKHP7_kSUiLFLTkYIm6a4"),
+    # אירועים ופרויקטים
+    "מחנה קיץ":          _sheet_url("1lDULmVEYkbbASAdG2MKiozoV1gzsYQ_P-sw_CyilhyE"),
+    "לילה יפני":         _sheet_url("1srujIboIUR3D0WQ9z1tHB9_d7jxs3Heoqz2KlwGLbdA"),
+    "תחרויות":           _sheet_url("1SaUURPE3a2GgmYRtCTcr7zSUr_EbjeBFEYkk2Nwilow"),
+    "הרשמה לחוג":        _sheet_url("1Mm9kbR59NYZ7_9ZskjRzRAmPpXpehJ6tzA0t1kR0_RI"),
+    "תשלומים":           _sheet_url("1hzkQZhmtIPL2S11Z399OmJik3pqKyOQsFp33tTNij5o"),
 }
 
 
 def sheets_links_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 נוכחות סירקין",    url=SHEET_LINKS["נוכחות סירקין"]),
-            InlineKeyboardButton("📋 נוכחות חגור",      url=SHEET_LINKS["נוכחות חגור"]),
+            InlineKeyboardButton("📋 סירקין",           url=SHEET_LINKS["נוכחות סירקין"]),
+            InlineKeyboardButton("📋 חגור",             url=SHEET_LINKS["נוכחות חגור"]),
         ],
         [
             InlineKeyboardButton("📋 נווה ירק",         url=SHEET_LINKS["נוכחות נווה ירק"]),
@@ -457,13 +489,18 @@ def sheets_links_markup() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📋 פונקציונלי",       url=SHEET_LINKS["נוכחות פונקציונלי"]),
-        ],
-        [
             InlineKeyboardButton("🗓 תוכניות אימון",    url=SHEET_LINKS["תוכניות אימון"]),
         ],
         [
             InlineKeyboardButton("🏕 מחנה קיץ",         url=SHEET_LINKS["מחנה קיץ"]),
             InlineKeyboardButton("🌸 לילה יפני",        url=SHEET_LINKS["לילה יפני"]),
+        ],
+        [
+            InlineKeyboardButton("🏆 תחרויות",          url=SHEET_LINKS["תחרויות"]),
+            InlineKeyboardButton("📝 הרשמה לחוג",       url=SHEET_LINKS["הרשמה לחוג"]),
+        ],
+        [
+            InlineKeyboardButton("💰 תשלומים",          url=SHEET_LINKS["תשלומים"]),
         ],
         [InlineKeyboardButton("🔙 חזרה",                callback_data="menu_back")],
     ])
@@ -1079,6 +1116,71 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Parent message callbacks ──
+    if action.startswith("pm_abs_br|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        name = ss.get("name", "")
+        from datetime import date as _d
+        date_str = _d.today().strftime("%d/%m/%Y")
+        # Count consecutive absences
+        log_data = load_json(Path("absence_log.json"), {})
+        records = log_data.get(name, [])
+        consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
+        msg = contacts_db.compose_absence_message(name, branch, date_str, consecutive=max(consec, 1))
+        sheets_sessions.pop(user_id, None)
+        await query.edit_message_text(
+            f"📱 *הודעה מוכנה:*\n\n{msg}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")]])
+        )
+        return
+
+    if action.startswith("pm_pay_br|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        ss = sheets_sessions.get(user_id, {})
+        name = ss.get("name", "")
+        from datetime import date as _d
+        from calendar import month_abbr as _mn
+        month_he = ["", "ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"]
+        month_str = month_he[_d.today().month]
+        msg = contacts_db.compose_payment_reminder(name, branch, month_str)
+        sheets_sessions.pop(user_id, None)
+        await query.edit_message_text(
+            f"💰 *תזכורת תשלום מוכנה:*\n\n{msg}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")]])
+        )
+        return
+
+    # ─── Absent parent messages ───
+    if action == "absent_msgs_all":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        absent_names = ss.get("absent_names", [])
+        branch = ss.get("branch", "")
+        date_str = ss.get("date", "")
+        if not absent_names:
+            await query.message.reply_text("❌ לא נמצאו נעדרים.")
+            return
+        msg_lines = ["📩 *הודעות לשליחה:*\n"]
+        for name in absent_names:
+            try:
+                # Count consecutive absences
+                log_data = load_json(Path("absence_log.json"), {})
+                records = log_data.get(name, [])
+                consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
+                txt = contacts_db.compose_absence_message(name, branch, date_str, consecutive=consec)
+                msg_lines.append(txt)
+                msg_lines.append("─" * 20)
+            except Exception:
+                msg_lines.append(f"*{name}* — לא נמצא איש קשר")
+        sheets_sessions.pop(user_id, None)
+        await query.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+        return
+
     # ─── Main menu callbacks ───
     if action == "noop":
         await query.answer()
@@ -1451,18 +1553,268 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── תוכנית יום מלא ──
+    if action == "menu_fullday":
+        await query.answer()
+        from datetime import date as _date
+        today = _date.today()
+        today_b = ws.today_branches()
+        rows = []
+        for b in tp.BRANCH_TABS:
+            groups = ws.groups_for_branch_on_date(b, today)
+            if groups:
+                non_cancelled = [g for g in groups if not g.get('cancelled')]
+                marker = f" ({len(non_cancelled)} קבוצות)" if non_cancelled else " 🚫"
+            else:
+                marker = ""
+            rows.append([InlineKeyboardButton(f"{b}{marker}", callback_data=f"fd_branch|{b}")])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            f"📅 *תוכנית יום מלא*\n\nבחר סניף:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if action.startswith("fd_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        from datetime import date as _date
+        dates = ws.next_training_dates(branch, n=5)
+        today = _date.today()
+        date_btns = []
+        for d in dates:
+            diff = (d - today).days
+            prefix = "היום" if diff == 0 else "מחר" if diff == 1 else ws.day_name(d)
+            groups = ws.groups_for_branch_on_date(branch, d)
+            n_active = sum(1 for g in groups if not g.get('cancelled'))
+            date_btns.append(InlineKeyboardButton(
+                f"{prefix} {d.day}/{d.month} ({n_active} קב׳)",
+                callback_data=f"fd_date|{branch}|{d.isoformat()}"
+            ))
+        rows = [date_btns[i:i+2] for i in range(0, len(date_btns), 2)]
+        rows.append([InlineKeyboardButton("🔙 חזרה", callback_data="menu_fullday"),
+                     InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            f"📅 *יום מלא — {branch}*\n\nבחר תאריך:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    if action.startswith("fd_date|"):
+        await query.answer()
+        _, branch, date_str = action.split("|", 2)
+        from datetime import date as _date
+        plan_date = _date.fromisoformat(date_str)
+        groups = ws.groups_for_branch_on_date(branch, plan_date)
+        day_he = ws.day_name(plan_date)
+        active = [g for g in groups if not g.get('cancelled')]
+        cancelled = [g for g in groups if g.get('cancelled')]
+        lines = [f"🥋 *תוכנית יום מלא — {branch} | יום {day_he} {plan_date.day}/{plan_date.month}*\n"]
+        lines.append("📝 *קבוצות לתוכנית:*")
+        for g in active:
+            lines.append(f"  ✅ {g['time']} — {g['name']}")
+        for g in cancelled:
+            lines.append(f"  🚫 {g['name']} — בוטל")
+        lines.append("\n💬 *שלח לי את התוכנית ואשמור לכולם בבת אחת*")
+        lines.append("_או כתוב: 'תכין תוכנית ליום מלא'_")
+        sheets_sessions[user_id] = {
+            "step": "fd_waiting_plan",
+            "branch": branch,
+            "plan_date": plan_date.isoformat(),
+        }
+        await query.edit_message_text("\n".join(lines), parse_mode="Markdown",
+            reply_markup=cancel_button())
+        return
+
+    # ── דוח נוכחות ──
+    if action == "menu_absence_report":
+        await query.answer()
+        await query.message.chat.send_action("typing")
+        try:
+            log_data = load_json(Path("absence_log.json"), {})
+            alerts = []
+            warnings = []
+            for name, records in log_data.items():
+                recent = records[-5:]
+                consec = sum(1 for r in reversed(recent) if r.get("absent"))
+                total_abs = sum(1 for r in records if r.get("absent"))
+                total = len(records)
+                if consec >= 3:
+                    last_branch = next((r.get("branch","") for r in reversed(records) if r.get("branch")), "")
+                    parents = contacts_db.find_parent(name, last_branch or None)
+                    phone = parents[0]["phone"] if parents else "—"
+                    alerts.append(f"⚠️ *{name}* — {consec} ברצף | {phone}")
+                elif consec >= 2 or (total > 0 and total_abs/total > 0.5):
+                    warnings.append(f"🟡 {name} — {total_abs}/{total}")
+            lines = ["📊 *דוח היעדרויות*\n"]
+            if alerts:
+                lines.append(f"🔴 *{len(alerts)} ספורטאים בסיכון גבוה:*")
+                lines.extend(alerts[:10])
+                lines.append("")
+            if warnings:
+                lines.append(f"🟡 *{len(warnings)} ספורטאים לתשומת לב:*")
+                lines.extend(warnings[:8])
+            if not alerts and not warnings:
+                lines.append("✅ אין היעדרויות חריגות")
+            await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")]]))
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה: {e}")
+        return
+
+    # ── מי לא שילם ──
+    if action == "menu_unpaid":
+        await query.answer()
+        from datetime import date as _date
+        today = _date.today()
+        months = []
+        for m in range(9, 13):
+            months.append(f"{m:02d}/{today.year - 1}")
+        for m in range(1, today.month + 1):
+            months.append(f"{m:02d}/{today.year}")
+        recent_months = months[-4:]
+        rows = [[InlineKeyboardButton(f"חודש {m}", callback_data=f"unpaid_month|{m}")] for m in reversed(recent_months)]
+        rows.append([InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")])
+        await query.edit_message_text(
+            "💰 *מי לא שילם — בחר חודש:*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    # ── הודעות להורים ──
+    if action == "menu_parent_msgs":
+        await query.answer()
+        await query.edit_message_text(
+            "📱 *הודעות להורים*\n\n"
+            "בחר סוג הודעה:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚠️ הודעת היעדרות", callback_data="pm_absence")],
+                [InlineKeyboardButton("💰 תזכורת תשלום",  callback_data="pm_payment")],
+                [InlineKeyboardButton("📢 הודעה כללית",   callback_data="pm_general")],
+                [InlineKeyboardButton("🔙 חזרה",           callback_data="menu_back")],
+            ])
+        )
+        return
+
+    if action == "pm_absence":
+        await query.answer()
+        sheets_sessions[user_id] = {"step": "pm_absence_name"}
+        await query.message.reply_text(
+            "📱 *הודעת היעדרות*\n\nמה שם הספורטאי?",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
+        return
+
+    if action == "pm_payment":
+        await query.answer()
+        sheets_sessions[user_id] = {"step": "pm_payment_name"}
+        await query.message.reply_text(
+            "💰 *תזכורת תשלום*\n\nמה שם הספורטאי?",
+            parse_mode="Markdown",
+            reply_markup=cancel_button()
+        )
+        return
+
+    if action == "pm_general":
+        await query.answer()
+        sheets_sessions[user_id] = {"step": "pm_general_branch"}
+        rows = [[InlineKeyboardButton(b, callback_data=f"pm_gen_branch|{b}")] for b in contacts_db.CONTACT_FILES]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text("📢 *הודעה כללית — לאיזה סניף?*",
+            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    # ── בדיקת מיילים ──
+    if action == "menu_check_emails":
+        await query.answer()
+        await query.message.chat.send_action("typing")
+        try:
+            from email_reader import fetch_payment_emails
+            msgs = fetch_payment_emails()
+            if msgs:
+                await query.message.reply_text(
+                    f"📧 *נמצאו {len(msgs)} מיילי תשלום*",
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.message.reply_text("📧 אין מיילי תשלום חדשים")
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה: {e}")
+        return
+
+    # ── תחרויות ──
+    if action == "menu_competitions":
+        await query.answer()
+        await query.message.chat.send_action("typing")
+        try:
+            s = comp_sheet.get_stats()
+            lines = [f"🏆 *תחרויות — {s['total_competitions']} סה\"כ*\n"]
+            for name, n in sorted(s['by_competition'].items(), key=lambda x: -x[1]):
+                lines.append(f"  *{name}*: {n} ספורטאים")
+            if s['medals']:
+                lines.append("\n🥇 *מדליות:*")
+                for k, v in s['medals'].items():
+                    lines.append(f"  {k}: {v}")
+            await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 פתח גיליון", url=SHEET_LINKS["תחרויות"])],
+                    [InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")],
+                ]))
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה: {e}")
+        return
+
+    # ── ארכיון תוכניות ──
+    if action == "menu_archive":
+        await query.answer()
+        try:
+            import training_archive as _arc
+            records = _arc._load()
+            recent = records[-10:]
+            lines = [f"📚 *ארכיון תוכניות — {len(records)} סה\"כ*\n"]
+            for r in reversed(recent):
+                date_str = r.get("saved_at", "")[:10]
+                lines.append(f"  {date_str} | *{r['branch']}* {r['group']}")
+            await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")]]))
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה: {e}")
+        return
+
+    # ── אנשי קשר ──
+    if action == "menu_contacts":
+        await query.answer()
+        try:
+            cs = contacts_db.stats()
+            lines = [f"📱 *אנשי קשר — {cs['total']} סה\"כ*\n"]
+            for b, n in cs["by_branch"].items():
+                lines.append(f"  {b}: {n} הורים")
+            lines.append("\n💡 שלח `/contacts שם ספורטאי` לחיפוש הורה")
+            await query.edit_message_text("\n".join(lines), parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📱 הכן הודעות להורים", callback_data="menu_parent_msgs")],
+                    [InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")],
+                ]))
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה: {e}")
+        return
+
     if action == "menu_help":
         await query.answer()
         help_text = (
             "💡 *מה אני יכול לעשות?*\n\n"
             "📅 *יומן* — מה יש לי היום/השבוע/החודש\n"
-            "➕ *הוסף ליומן* — מחר ב-10:00 פגישה עם X\n"
-            "🥋 *תוכנית אימון* — סירקין יום ב׳, ד-ו\n"
-            "✅ *נוכחות* — נוכחות סירקין\n"
-            "🏕️ *מחנה קיץ* — רשימת ילדים, עדכונים\n"
-            "🌙 *לילה יפני* — רשימת משתתפים\n"
-            "💬 *כל שאלה חופשית* — שאל אותי כל מה שתרצה\n\n"
-            "או פשוט כתוב לי מה שאתה צריך 😊"
+            "✅ *נוכחות* — סמן נוכחות לכל סניף\n"
+            "🥋 *תוכנית יום מלא* — כל הקבוצות בסניף בבת אחת\n"
+            "📱 *הודעות להורים* — היעדרות, תשלום, כללי\n"
+            "💰 *תשלומים* — מי לא שילם + תזכורות\n"
+            "🏆 *תחרויות* — נתוני תחרויות ומדליות\n"
+            "💬 *כל שאלה חופשית* — שאל אותי כל מה שתרצה 😊"
         )
         await query.edit_message_text(help_text, parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
@@ -1884,6 +2236,44 @@ async def handle_attendance_callback(query, user_id: str, action: str, context):
                 text="📅 *נוצרו תזכורות ביומן למחר ב-09:00:*\n" + "\n".join(f"• {m}" for m in cal_msgs),
                 parse_mode="Markdown"
             )
+
+        # Parent contact lookup for absent students
+        if absent_names and branch:
+            try:
+                contact_lines = ["📱 *פרטי הורים לנעדרים:*\n"]
+                found_any = False
+                for name in absent_names[:8]:  # limit to 8
+                    parents = contacts_db.find_parent(name, branch)
+                    if parents:
+                        p = parents[0]
+                        # Check for consecutive absences
+                        log_data = load_json(Path("absence_log.json"), {})
+                        records = log_data.get(name, [])
+                        consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
+                        streak_note = f" ⚠️ {consec} ברצף" if consec >= 2 else ""
+                        contact_lines.append(f"*{name}*{streak_note}")
+                        contact_lines.append(f"  📞 {p['parent_name']}: `{p['phone']}`")
+                        found_any = True
+                    else:
+                        contact_lines.append(f"*{name}* — לא נמצא איש קשר")
+                if found_any:
+                    # Store absent names for messaging flow
+                    sheets_sessions[user_id] = {
+                        "step": "absent_msg_ready",
+                        "absent_names": absent_names,
+                        "branch": branch,
+                        "date": session["date"],
+                    }
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text="\n".join(contact_lines),
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("📩 הכן הודעות לכולם", callback_data="absent_msgs_all"),
+                        ]])
+                    )
+            except Exception as e:
+                log.error("Contact lookup error: %s", e)
 
         # Update sheet design (deletes empty columns, re-styles)
         try:
@@ -2421,6 +2811,33 @@ async def cmd_dropout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ שגיאה: {e}")
 
 
+async def contacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/contacts [שם] — חיפוש הורה לפי שם ספורטאי."""
+    args = context.args
+    if args:
+        name = " ".join(args)
+        results = contacts_db.find_parent(name)
+        if not results:
+            await update.message.reply_text(f"❌ לא נמצא הורה עבור: {name}")
+            return
+        lines = [f"🔍 *תוצאות עבור {name}:*\n"]
+        for r in results[:5]:
+            lines.append(f"*{r['parent_name']}* — `{r['phone']}`")
+            if len(r["phones"]) > 1:
+                lines.append(f"  טלפון נוסף: `{r['phones'][1]}`")
+            lines.append(f"  סניף: {r['branch']}")
+            lines.append("")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    else:
+        # Summary stats
+        cs = contacts_db.stats()
+        lines = [f"📱 *אנשי קשר — {cs['total']} סה\"כ*\n"]
+        for b, n in cs["by_branch"].items():
+            lines.append(f"  {b}: {n}")
+        lines.append("\n*שימוש:* `/contacts שם ספורטאי`")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def monthly_report_job(context):
     """Background job — sends monthly financial report on the 1st of each month."""
     if not TOPAZ_CHAT_ID:
@@ -2690,7 +3107,7 @@ async def design_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     errors.append(f"{branch}/{group}: {e}")
         # Also design training plans sheet
         try:
-            plans_result = tp.design_all_tabs(delete_empty=True)
+            plans_result = tp.design_all_tabs()
             count_plans = plans_result.count("✅")
             result = f"✅ עיצוב הוחל על {count} גיליונות נוכחות + {count_plans} תוכניות אימון"
         except Exception as e:
@@ -2715,6 +3132,29 @@ def _build_data_context(text: str) -> str:
     camp_keywords = ("מחנה",)
     lyla_keywords = ("לילה יפני",)
     attendance_stat_keywords = ("נוכחות", "אחוז", "סטטיסטיקה", "דוח")
+
+    # Full-day plan context — inject schedule when asking for a full day
+    full_day_keywords = ("יום מלא", "כל הקבוצות", "כל הסניף", "לסניף", "לכל")
+    if any(k in t for k in full_day_keywords):
+        try:
+            from datetime import date as _date
+            today = _date.today()
+            detected_branch = next((b for b in tp.BRANCH_TABS if b in t), None)
+            # Try to detect date from text
+            _b, plan_date = tp.detect_branch_and_date(t)
+            detected_branch = detected_branch or _b
+            check_date = plan_date or today
+            if detected_branch:
+                groups = ws.groups_for_branch_on_date(detected_branch, check_date)
+                if groups:
+                    day_he = ws.day_name(check_date)
+                    lines = [f"לוז {detected_branch} יום {day_he} {check_date.day}/{check_date.month}:"]
+                    for g in groups:
+                        cancelled_note = " ← בוטל" if g.get("cancelled") else ""
+                        lines.append(f"  {g['time']} {g['name']}{cancelled_note}")
+                    parts.append("\n".join(lines))
+        except Exception:
+            pass
 
     if any(k in t for k in absence_keywords):
         try:
@@ -2783,6 +3223,53 @@ def _build_data_context(text: str) -> str:
             for b, n in sorted(s['by_branch'].items(), key=lambda x: -x[1]):
                 lines.append(f"  {b}: {n}")
             parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+    if any(k in t for k in ("תחרות", "תחרויות", "גביע", "אליפות", "מדליה")):
+        try:
+            s = comp_sheet.get_stats()
+            lines = [f"תחרויות: {s['total_competitions']} תחרויות, {s['total_participants']} משתתפים"]
+            for comp_name, n in sorted(s['by_competition'].items(), key=lambda x: -x[1]):
+                lines.append(f"  {comp_name}: {n} ספורטאים")
+            if s['medals']:
+                lines.append("מדליות: " + ", ".join(f"{k}: {v}" for k, v in s['medals'].items()))
+            parts.append("\n".join(lines))
+        except Exception:
+            pass
+
+    # Contacts context — parent lookup
+    contact_triggers = ("טלפון", "הורה", "הורים", "אנשי קשר", "שלח הודעה", "הכן הודעה",
+                        "מי ההורה", "ווטסאפ", "whatsapp", "sms", "להורה")
+    if any(k in t.lower() for k in contact_triggers):
+        try:
+            cs = contacts_db.stats()
+            lines = [f"אנשי קשר: {cs['total']} סה\"כ"]
+            for b, n in cs["by_branch"].items():
+                lines.append(f"  {b}: {n}")
+            parts.append("\n".join(lines))
+            # If specific athlete name mentioned, look them up
+            import re as _re
+            # Heuristic: look for Hebrew words that could be athlete names (2+ words)
+            words = _re.findall(r'[א-ת]{2,}', t)
+            if len(words) >= 2:
+                # Try two-word combos
+                for i in range(len(words) - 1):
+                    candidate = f"{words[i]} {words[i+1]}"
+                    results = contacts_db.find_parent(candidate)
+                    if results:
+                        p = results[0]
+                        parts.append(f"הורה של {candidate}: {p['parent_name']} — {p['phone']}")
+                        break
+        except Exception:
+            pass
+
+    # Payment + contacts cross-reference
+    payment_contact_triggers = ("לא שילם", "חייב", "חוב", "תשלום חסר", "לא שולם", "מי לא שילם")
+    if any(k in t for k in payment_contact_triggers):
+        try:
+            cs = contacts_db.stats()
+            parts.append(f"נתוני אנשי קשר זמינים: {cs['total']} הורים — ניתן לשלוח תזכורות")
         except Exception:
             pass
 
@@ -3022,6 +3509,48 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     step = ss.get('step')
+
+    # ── Full-day plan — waiting for plan text ───────────────────────────────────
+    if step == "fd_waiting_plan":
+        from datetime import date as _date
+        branch    = ss.get("branch", "")
+        plan_date = _date.fromisoformat(ss.get("plan_date", _date.today().isoformat()))
+        sheets_sessions.pop(user_id, None)
+        pending_plans[user_id] = {
+            "reply": text, "original": text,
+            "branch": branch, "plan_date": plan_date.isoformat(),
+        }
+        save_json(PENDING_FILE, pending_plans)
+        await _plan_offer_save(update, user_id, text, branch, plan_date)
+        return True
+
+    # ── Parent message — absence ─────────────────────────────────────────────────
+    if step == "pm_absence_name":
+        name = text.strip()
+        ss["name"] = name
+        ss["step"] = "pm_absence_branch"
+        sheets_sessions[user_id] = ss
+        rows = [[InlineKeyboardButton(b, callback_data=f"pm_abs_br|{b}")] for b in contacts_db.CONTACT_FILES]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await update.message.reply_text(
+            f"✅ {name}\n\nאיזה סניף?",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return True
+
+    # ── Parent message — payment ─────────────────────────────────────────────────
+    if step == "pm_payment_name":
+        name = text.strip()
+        ss["name"] = name
+        ss["step"] = "pm_payment_branch"
+        sheets_sessions[user_id] = ss
+        rows = [[InlineKeyboardButton(b, callback_data=f"pm_pay_br|{b}")] for b in contacts_db.CONTACT_FILES]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await update.message.reply_text(
+            f"✅ {name}\n\nאיזה סניף?",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return True
 
     # ── Plan edit — content input ─────────────────────────────────────────────────
     if step == "plan_edit_content":
@@ -3835,11 +4364,31 @@ async def daily_training_reminder_job(context):
             branch = entry["branch"]
             lines.append(f"  📍 *{branch}*")
             for g in entry["groups"]:
-                lines.append(f"    {g['time']} — {g['name']}")
+                cancelled_note = " 🚫 בוטל" if g.get("cancelled") else ""
+                lines.append(f"    {g['time']} — {g['name']}{cancelled_note}")
         url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid=0"
         lines.append(f"\n  🔗 [פתח תוכניות אימון]({url})")
     else:
         lines.append("🏖️ *אין אימונים היום*")
+
+    # ── התראות היעדרות חריגה ──
+    try:
+        absence_log = load_json(Path("absence_log.json"), {})
+        alerts = []
+        for name, records in absence_log.items():
+            recent = records[-4:]
+            consec = sum(1 for r in reversed(recent) if r.get("absent"))
+            if consec >= 3:
+                # Find branch from records
+                last_branch = next((r.get("branch", "") for r in reversed(records) if r.get("branch")), "")
+                parents = contacts_db.find_parent(name, last_branch or None)
+                phone = parents[0]["phone"] if parents else "—"
+                alerts.append(f"  ⚠️ {name} ({consec} ברצף) — {phone}")
+        if alerts:
+            lines.append("\n⚠️ *היעדרויות ברצף — לטיפול:*")
+            lines.extend(alerts[:5])
+    except Exception:
+        pass
 
     # שלח רק אם יש תוכן מעבר לכותרת
     if len(lines) <= 2:
@@ -4005,6 +4554,7 @@ def main():
     app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("dropout", cmd_dropout))
+    app.add_handler(CommandHandler("contacts", contacts_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

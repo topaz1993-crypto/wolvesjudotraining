@@ -883,6 +883,17 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     saved_any = False
     for group_info, items in sections:
         group_name = group_info["name"]
+
+        # Cancelled group → write "בוטל" to sheet instead of content
+        if group_info.get("cancelled"):
+            try:
+                save_plan_to_sheet(branch, group_name, plan_date, ["בוטל"])
+                results.append(f"🚫 {group_name}: בוטל")
+                saved_any = True
+            except Exception as e:
+                results.append(f"⚠️ {group_name}: לא נכתב (בוטל) — {e}")
+            continue
+
         if not items:
             results.append(f"⚠️ {group_name}: אין תוכן")
             continue

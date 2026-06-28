@@ -3,6 +3,7 @@ Payments sheet manager — read and update the תשלומים tab.
 """
 
 import os
+from typing import Optional
 import base64
 import pickle
 import warnings
@@ -80,7 +81,7 @@ def load_students() -> list[dict]:
     return students
 
 
-def find_student(name: str) -> dict | None:
+def find_student(name: str) -> Optional[dict]:
     """Fuzzy-find student by name. Returns best match or None."""
     students = load_students()
     full_names = [s["full_name"] for s in students]

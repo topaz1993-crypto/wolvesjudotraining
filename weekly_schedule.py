@@ -25,10 +25,11 @@ SCHEDULE = {
             "branch": "סירקין",
             "tab":    "סירקין",
             "groups": [
-                {"name": "ד-ו",       "time": "14:30-15:30"},
-                {"name": "ג",         "time": "15:30-16:30"},
-                {"name": "א-ב",       "time": "16:30-17:15"},
-                {"name": "ז- בוגרים", "time": "18:00-19:30"},
+                {"name": "ד-ו",           "time": "14:30-15:30"},
+                {"name": "ג",             "time": "15:30-16:30"},
+                {"name": "א-ב",           "time": "16:30-17:15"},
+                {"name": "גנים - חמישי",  "time": "17:15-18:00", "cancelled": True},
+                {"name": "ז- בוגרים",     "time": "18:00-19:30"},
             ],
         },
     ],
@@ -126,11 +127,34 @@ def branches_for_date(d) -> list[str]:
     return [s["branch"] for s in SCHEDULE.get(d.weekday(), [])]
 
 
+# CANCELLED_GROUPS: {weekday: {branch: [group_names]}}
+# Groups listed here get "בוטל" written in training plans instead of actual content.
+CANCELLED_GROUPS: dict[int, dict[str, list[str]]] = {
+    # ביום שני — גנים לא מתאמנת בסירקין (מתאמנת רק חמישי)
+    0: {"סירקין": ["גנים - חמישי"]},
+}
+
+
+def is_group_cancelled(branch: str, group_name: str, d) -> bool:
+    """Return True if this group is marked as cancelled on the given date."""
+    day_cancelled = CANCELLED_GROUPS.get(d.weekday(), {})
+    return group_name in day_cancelled.get(branch, [])
+
+
 def groups_for_branch_on_date(branch: str, d) -> list[dict]:
-    """Return list of {name, time} for a branch on a given date."""
+    """Return list of {name, time, cancelled?} for a branch on a given date."""
     for s in SCHEDULE.get(d.weekday(), []):
         if s["branch"] == branch:
-            return s["groups"]
+            groups = s["groups"]
+            # Annotate cancelled groups
+            day_cancelled = CANCELLED_GROUPS.get(d.weekday(), {})
+            branch_cancelled = day_cancelled.get(branch, [])
+            if branch_cancelled:
+                return [
+                    {**g, "cancelled": g["name"] in branch_cancelled}
+                    for g in groups
+                ]
+            return groups
     return []
 
 
