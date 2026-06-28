@@ -559,7 +559,23 @@ def smart_map_items(items: list[str], n_rows: int, branch: str = "") -> list[str
     result = [""] * n_rows
 
     used = set()
+    # First pass: labeled items (e.g. "חימום: שליחים") — exact row type match
+    ROW_TYPE_SET = set(ROW_TYPES)
+    for item_idx, item in enumerate(items):
+        if item_idx in used or not item:
+            continue
+        if ':' in item:
+            prefix = item.split(':', 1)[0].strip()
+            if prefix in ROW_TYPE_SET:
+                rt_idx = ROW_TYPES.index(prefix) if prefix in ROW_TYPES[:n_rows] else -1
+                if rt_idx >= 0 and not result[rt_idx]:
+                    result[rt_idx] = item.split(':', 1)[1].strip()  # strip the "חימום:" label
+                    used.add(item_idx)
+
+    # Second pass: keyword matching
     for rt_idx, rt in enumerate(row_types):
+        if result[rt_idx]:
+            continue
         kws = kw_set.get(rt, [])
         for item_idx, item in enumerate(items):
             if item_idx in used or not item:
@@ -570,6 +586,7 @@ def smart_map_items(items: list[str], n_rows: int, branch: str = "") -> list[str
                 used.add(item_idx)
                 break
 
+    # Third pass: fill remaining slots sequentially
     remaining = [item for i, item in enumerate(items) if i not in used and item]
     for rt_idx in range(n_rows):
         if not result[rt_idx] and remaining:
@@ -797,17 +814,27 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     return "\n".join(results)
 
 
+ROW_TYPE_LABELS = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף", "סיום",
+                   "warm", "strength", "metcon", "cooldown"]
+
+
 def _split_plan_into_sections(text: str, sched_groups: list) -> list:
     """
     Split plan text into per-group sections.
     Returns list of (group_info_dict, items_list).
 
-    Supports three formats:
-      1. "ד-ו: גאורגי, תרגול דה אשי, רנדורי"  (colon on same line, comma-separated or newlines)
-      2. "⏰ 14:30 | 👥 ד-ו\n• גאורגי\n• תרגול"  (Claude emoji format)
-      3. No markers → all content goes to first group only, rest empty
+    Supports formats (tried in order):
+      1. "ב-ד:\nחימום: ...\nתרגול: ..."  (group name colon + labeled rows)
+      2. "⏰ 14:30–15:30 | 👥 ב-ד"  (Claude emoji, handles em-dash)
+      3. "**ב-ד** (14:30)" or "### ב-ד"  (Markdown headers)
+      4. No markers → all content goes to first group only
     """
     import re
+
+    # Normalize em-dash and similar to regular dash for matching
+    text = text.replace('–', '-').replace('—', '-').replace('–', '-').replace('—', '-')
+
+    ROW_TYPE_PREFIXES = tuple(r + ":" for r in ROW_TYPE_LABELS)
 
     def _clean_line(line: str) -> str:
         line = line.strip()
@@ -820,10 +847,15 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
         items = []
         for line in block.splitlines():
             cleaned = _clean_line(line)
-            if not cleaned or re.match(r'^[-—=]{3,}$', cleaned):
+            if not cleaned or re.match(r'^[-=]{3,}$', cleaned):
                 continue
-            # Split comma-separated items (e.g. "גאורגי, תרגול, רנדורי")
-            if ',' in cleaned:
+            # If line starts with a row-type label (חימום:, תרגול:, etc.),
+            # keep it as one item — don't split on commas (e.g. "תרגול: A, B, C")
+            low = cleaned.lower()
+            is_labeled = any(low.startswith(p.lower()) for p in ROW_TYPE_PREFIXES)
+            if is_labeled:
+                items.append(cleaned)
+            elif ',' in cleaned:
                 for part in cleaned.split(','):
                     p = part.strip()
                     if p:
@@ -833,34 +865,39 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
         return items
 
     def _best_match(label: str, groups: list, used: set) -> int:
-        """Return index of best matching schedule group for a label."""
-        label_clean = label.strip().replace('*', '').replace('_', '')
+        label_clean = re.sub(r'[*_#\(\)0-9:.\s]', '', label).strip()
+        # Also normalize em-dash in label just in case
+        label_clean = label_clean.replace('–', '-').replace('—', '-')
         best_idx, best_score = -1, 0
         for i, sg in enumerate(groups):
             if i in used:
                 continue
             name = sg["name"]
+            name_clean = re.sub(r'\s+', '', name)
+            label_nospace = re.sub(r'\s+', '', label_clean)
             score = 0
-            if label_clean == name:
+            if label_nospace == name_clean:
                 score = 10
-            elif label_clean in name or name in label_clean:
+            elif label_nospace in name_clean or name_clean in label_nospace:
                 score = 6
-            elif any(part and part in name for part in label_clean.split('-')):
+            elif any(part and part in name for part in re.split(r'[-–]', label_clean) if part):
                 score = 3
             if score > best_score:
                 best_score, best_idx = score, i
         return best_idx if best_score > 0 else -1
 
-    # ── Format 1: group name on a line ending with ":" or "group_name: content" ──
-    # Example: "ד-ו: גאורגי, תרגול..." or "ד-ו:\nגאורגי\nתרגול..."
-    # Build a pattern from all known group names
-    group_names_pattern = '|'.join(
-        re.escape(sg["name"]) for sg in sched_groups
-    )
+    # ── Format 1: group name colon "ב-ד:" or "ב-ד: content" ──
+    group_names_pattern = '|'.join(re.escape(sg["name"]) for sg in sched_groups)
     colon_splits = list(re.finditer(
-        rf'(?m)^[ \t]*({group_names_pattern})\s*:\s*(.*)?$',
+        rf'(?m)^[ \t]*({group_names_pattern})\s*[:()\d\-\s]*:\s*(.*)?$',
         text
     ))
+    # Also try simpler: line is just the group name + colon
+    if not colon_splits:
+        colon_splits = list(re.finditer(
+            rf'(?m)^[ \t]*({group_names_pattern})\s*:\s*(.*)?$',
+            text
+        ))
 
     if colon_splits:
         sections_raw = []
@@ -885,7 +922,7 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
                 result.append((sg, []))
         return result
 
-    # ── Format 2: Claude emoji format ⏰ TIME | 👥 GROUP ──
+    # ── Format 2: emoji format ⏰ TIME | 👥 GROUP (handles em-dash) ──
     emoji_splits = list(re.finditer(
         r'(?m)^(?:⏰\s*)?(\d{1,2}:\d{2}[^|\n]*)\s*\|\s*(?:👥\s*)?(.{1,30}?)(?:\s*\(.*?)?\s*$',
         text
@@ -912,7 +949,34 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
                 result.append((sg, []))
         return result
 
-    # ── Format 3: No markers — put all content in first group only ──
+    # ── Format 3: Markdown headers **ב-ד** or ### ב-ד ──
+    md_splits = list(re.finditer(
+        r'(?m)^(?:#{1,3}\s*|\*{1,2})(' + group_names_pattern + r')\*{0,2}.*$',
+        text
+    ))
+
+    if md_splits:
+        sections_raw = []
+        for i, m in enumerate(md_splits):
+            label = m.group(1).strip()
+            start = m.end()
+            end = md_splits[i + 1].start() if i + 1 < len(md_splits) else len(text)
+            items = _extract_items(text[start:end])
+            sections_raw.append((label, items))
+
+        result = []
+        used = set()
+        for label, items in sections_raw:
+            idx = _best_match(label, sched_groups, used)
+            if idx >= 0:
+                used.add(idx)
+                result.append((sched_groups[idx], items))
+        for i, sg in enumerate(sched_groups):
+            if i not in used:
+                result.append((sg, []))
+        return result
+
+    # ── Format 4: No markers — all content to first group ──
     all_items = _extract_items(text)
     result = [(sched_groups[0], all_items)] if sched_groups else []
     for sg in sched_groups[1:]:
