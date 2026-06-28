@@ -513,44 +513,63 @@ def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
     return []
 
 
-def smart_map_items(items: list[str], n_rows: int) -> list[str]:
+KEYWORDS_BY_BRANCH = {
+    "default": {
+        "חימום":  ["חימום", "ריצה", "גלגול", "שעון", "פתיחה", "גאורגי", "ג'ורג'י",
+                   "warm", "שליחים", "ג'ונגל", "תופסת", "גה גה"],
+        "תרגול":  ["תרגול", "הדגמה", "הסבר", "חזרות", "נושא", "כניסה", "טכניקה", "עבודה",
+                   "מסלול", "הפלות", "strength", "bench", "pull", "squat", "deadlift"],
+        "קרבות":  ["רנדורי", "קרבות", "קרב", "ספרינג", "מצבי", "ניקוד", "זהב",
+                   "amrap", "emom", "metcon", "e2mom", "e3mom", "e1mom", "rope", "box jump"],
+        "משחק":   ["משחק", "ציידים", "זאבים", "שועלים", "מלך", "כדור", "ביפ", "עיר",
+                   "ג'ודופונג", "ביסט", "ישיבות", "קיר", "חיי שרה"],
+        "כוח":    ["כוח", "טבאטה", "ברינג", "שכיבות", "מתח", "מקבילים", "פירמידה",
+                   "tabata", "db lunge", "burpee"],
+        "נוסף":   ["סיום", "שיחה", "דיון", "הערות", "תדריך", "תמונה"],
+    },
+    "איפון פייט": {
+        "חימום":  ["שליחים", "ג'ונגל", "שוטרים", "ריצה", "אקרובטיקה", "חימום", "warm"],
+        "תרגול":  ["טבאטה", "tabata", "כוח", "תרגיל", "סקוואט", "אולר", "עיירה",
+                   "strength", "6 תרגילים", "בזוגות"],
+        "קרבות":  ["ג'ודופונג", "קיר הנינג", "עיר הקרח", "ביסט גיימס", "מחניים",
+                   "חיי שרה", "ציידים", "game", "תחרות"],
+        "משחק":   ["זאבים", "ישיבות", "משחק", "שועלים", "אם נשאר"],
+    },
+    "פונקציונלי": {
+        "חימום":  ["warm", "חימום", "ריצה", "גלגול", "תופס", "שליחים"],
+        "תרגול":  ["strength", "bench", "pull", "squat", "deadlift", "press",
+                   "e2mom", "e3mom", "weighted", "pistol"],
+        "קרבות":  ["amrap", "emom", "e1mom", "metcon", "rope climb", "box jump",
+                   "shuttle", "burpee", "lunge", "front squat"],
+        "כוח":    ["מתיחות", "cooldown", "stretch", "שחרור"],
+    },
+}
+
+
+def smart_map_items(items: list[str], n_rows: int, branch: str = "") -> list[str]:
     """
     Map plan items to sheet rows by keyword detection.
-    Row order: חימום, תרגול, קרבות, משחק, כוח, נוסף
-    Items that already match a row type are placed there;
-    unmatched items fill remaining slots sequentially.
+    Uses branch-specific keywords for איפון פייט and פונקציונלי.
     """
     if not items:
         return [""] * n_rows
 
+    kw_set = KEYWORDS_BY_BRANCH.get(branch, KEYWORDS_BY_BRANCH["default"])
     row_types = ROW_TYPES[:n_rows]
     result = [""] * n_rows
 
-    # Keywords per row type
-    keywords = {
-        "חימום":  ["חימום", "ריצה", "גלגול", "שעון", "פתיחה", "ג'ורג'י", "גאורגי"],
-        "תרגול":  ["תרגול", "הדגמה", "הסבר", "חזרות", "נושא", "כניסה", "טכניקה", "עבודה"],
-        "קרבות":  ["רנדורי", "קרבות", "קרב", "ספרינג", "מצבי", "ניקוד", "זהב"],
-        "משחק":   ["משחק", "ציידים", "זאבים", "שועלים", "מלך", "כדור", "ביפ", "עיר"],
-        "כוח":    ["כוח", "טבאטה", "ברינג", "שכיבות", "מתח", "מקבילים", "פירמידה"],
-        "נוסף":   ["סיום", "שיחה", "דיון", "הערות", "תדריך"],
-    }
-
     used = set()
-    # First pass: match by keywords
     for rt_idx, rt in enumerate(row_types):
-        if rt_idx >= n_rows:
-            break
-        kws = keywords.get(rt, [])
+        kws = kw_set.get(rt, [])
         for item_idx, item in enumerate(items):
             if item_idx in used or not item:
                 continue
-            if any(kw in item for kw in kws):
+            item_lower = item.lower()
+            if any(kw.lower() in item_lower for kw in kws):
                 result[rt_idx] = item
                 used.add(item_idx)
                 break
 
-    # Second pass: fill remaining slots with unmatched items (sequential)
     remaining = [item for i, item in enumerate(items) if i not in used and item]
     for rt_idx in range(n_rows):
         if not result[rt_idx] and remaining:
@@ -584,8 +603,7 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     if not content_rows:
         raise ValueError(f"אין שורות תוכן לקבוצה '{group}'")
 
-    # Smart mapping: let Claude assign each item to the right content row
-    mapped = smart_map_items(plan_items, len(content_rows))
+    mapped = smart_map_items(plan_items, len(content_rows), branch=branch)
 
     updates = []
     for i, item in enumerate(mapped):
