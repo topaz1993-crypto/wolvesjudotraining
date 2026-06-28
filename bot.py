@@ -496,6 +496,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     user_id = str(update.effective_user.id)
 
+    # ── "לא שמר" / "תשמור" — re-offer save from pending_plans ──────────────────
+    SAVE_RETRY_TRIGGERS = ("לא שמר", "לא נשמר", "תשמור", "שמור עכשיו", "לשמור", "שמור את זה")
+    if any(t in user_text for t in SAVE_RETRY_TRIGGERS) and pending_plans.get(user_id):
+        plan_data = pending_plans[user_id]
+        plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
+        original_text = plan_data.get("original", "") if isinstance(plan_data, dict) else ""
+        branch, plan_date = tp.detect_branch_and_date(original_text)
+        if not branch or not plan_date:
+            b2, d2 = tp.detect_branch_and_date(plan_text)
+            branch = branch or b2
+            plan_date = plan_date or d2
+        await _plan_offer_save(update, user_id, plan_text, branch, plan_date)
+        return
+
     # ── Training plan detection — user sends plan directly ──────────────────────
     PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "משחק", "כוח", "גאורגי", "נושא")
     is_plan_text = (
@@ -1078,8 +1092,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         plan_data = pending_plans.get(user_id, {})
         plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
-        branch, plan_date = tp.detect_branch_and_date(plan_text)
-        # Use message object to call the shared helper
+        original_text = plan_data.get("original", "") if isinstance(plan_data, dict) else ""
+        # Detect branch+date from original user request first (more reliable than Claude reply)
+        branch, plan_date = tp.detect_branch_and_date(original_text)
+        if not branch or not plan_date:
+            b2, d2 = tp.detect_branch_and_date(plan_text)
+            branch = branch or b2
+            plan_date = plan_date or d2
         class _FakeUpdate:
             def __init__(self, msg): self.message = msg
         await _plan_offer_save(_FakeUpdate(query.message), user_id, plan_text, branch, plan_date)
