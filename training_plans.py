@@ -909,6 +909,42 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     return "\n".join(results)
 
 
+def load_plan_from_sheet(branch: str, plan_date) -> dict:
+    """
+    Read the current training plan from the sheet for a given branch+date.
+    Returns {group_name: {row_type: value, ...}} or empty dict if not found.
+    """
+    tab_name = BRANCH_TABS.get(branch)
+    if not tab_name:
+        return {}
+
+    service = _get_service()
+    rows = _read_tab(service, tab_name)
+    if not rows:
+        return {}
+
+    date_str = f"{plan_date.day}/{plan_date.month}"
+    header = rows[0]
+    col_idx = next((i for i, c in enumerate(header) if str(c).strip() == date_str), None)
+    if col_idx is None:
+        return {}
+
+    # Read group rows
+    group_rows = _find_group_rows(rows)  # [(start_row_0idx, end_row_0idx, group_name)]
+    result = {}
+    for start_row, end_row, group_name in group_rows:
+        items = {}
+        for r_idx in range(start_row, end_row):  # end_row is exclusive
+            row = rows[r_idx] if r_idx < len(rows) else []
+            row_type = row[1].strip() if len(row) > 1 else ""
+            val = row[col_idx].strip() if col_idx < len(row) else ""
+            if row_type and val:
+                items[row_type] = val
+        if items:
+            result[group_name] = items
+    return result
+
+
 ROW_TYPE_LABELS = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף", "סיום",
                    "warm", "strength", "metcon", "cooldown"]
 

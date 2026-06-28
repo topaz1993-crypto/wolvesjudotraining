@@ -32,6 +32,9 @@ import dropout_detector
 import weekly_schedule as ws
 import training_archive as arc
 import contacts as contacts_db
+import invoice4u_reader
+import invoice4u_sync
+import payment_matcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -102,6 +105,8 @@ pending_belt_events: dict[str, dict] = {}
 new_student_sessions: dict[str, dict] = {}
 # calendar_sessions[user_id] = {"step": "pick_cal"|"pick_date"|"pick_title", "calendar": ..., "date": ..., "title": ...}
 calendar_sessions: dict[str, dict] = {}
+# payment_sync_sessions[user_id] = active invoice4u sync flow state
+payment_sync_sessions: dict[str, dict] = {}
 
 
 def get_history(user_id: str) -> list:
@@ -527,6 +532,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_new_student_text(update, context):
         return
 
+    # Invoice4u payment sync unknown-name flow
+    if await handle_inv4u_text(update, context):
+        return
+
     # Sheets (camp/lyla) text flow
     if await handle_sheets_text(update, context):
         return
@@ -728,9 +737,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             save_json(PENDING_FILE, pending_plans)
 
-        save_plan_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 שמור בגיליון", callback_data="menu_plan_save")],
-        ])
+        if is_training_plan:
+            _b = pending_plans[user_id].get("branch", "") if isinstance(pending_plans.get(user_id), dict) else ""
+            _d_iso = pending_plans[user_id].get("plan_date", "") if isinstance(pending_plans.get(user_id), dict) else ""
+            if _b and _d_iso:
+                from datetime import date as _date_cls
+                _d = _date_cls.fromisoformat(_d_iso)
+                _day_he = ws.day_name(_d)
+                save_label = f"💾 שמור — {_b} | {_day_he} {_d.day}/{_d.month}"
+                save_cb    = f"plan_save_quick|{_b}|{_d_iso}"
+            else:
+                save_label = "💾 שמור בגיליון"
+                save_cb    = "menu_plan_save"
+            save_plan_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(save_label, callback_data=save_cb)],
+                [InlineKeyboardButton("✏️ ערוך תוכנית", callback_data="plan_edit_current")],
+            ])
+        else:
+            save_plan_markup = None
 
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
@@ -1243,6 +1267,64 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         class _FakeUpdate:
             def __init__(self, msg): self.message = msg
         await _plan_offer_save(_FakeUpdate(query.message), user_id, plan_text, branch, plan_date)
+        return
+
+    # ── Quick save — branch and date embedded in callback ──
+    if action.startswith("plan_save_quick|"):
+        await query.answer()
+        parts = action.split("|")
+        branch   = parts[1] if len(parts) > 1 else ""
+        date_iso = parts[2] if len(parts) > 2 else ""
+        plan_data = pending_plans.get(user_id, {})
+        plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
+        if not plan_text:
+            await query.message.reply_text("❌ לא נמצאה תוכנית לשמירה. שלח את התוכנית מחדש.")
+            return
+        if not branch or not date_iso:
+            class _FakeUpdate2:
+                def __init__(self, msg): self.message = msg
+            await _plan_offer_save(_FakeUpdate2(query.message), user_id, plan_text, None, None)
+            return
+        from datetime import date as _date_cls
+        plan_date = _date_cls.fromisoformat(date_iso)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"⏳ שומר תוכנית לגיליון — {branch} | {plan_date.day}/{plan_date.month}...")
+        try:
+            result = tp.save_full_day(branch, plan_date, plan_text)
+            record_action(user_id, "plan_save", f"שמירת תוכנית {branch} {plan_date}",
+                          "plan_save", {"branch": branch, "plan_date": date_iso})
+            await query.message.reply_text(result, parse_mode="Markdown")
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה בשמירה: {e}")
+        return
+
+    # ── Edit current plan (opens branch/date picker for editing) ──
+    if action == "plan_edit_current":
+        await query.answer()
+        plan_data = pending_plans.get(user_id, {})
+        branch = plan_data.get("branch", "") if isinstance(plan_data, dict) else ""
+        date_iso = plan_data.get("plan_date", "") if isinstance(plan_data, dict) else ""
+        if branch and date_iso:
+            from datetime import date as _date_cls
+            plan_date = _date_cls.fromisoformat(date_iso)
+            day_he = ws.day_name(plan_date)
+            await query.message.reply_text(
+                f"✏️ *עריכת תוכנית — {branch} | {day_he} {plan_date.day}/{plan_date.month}*\n\n"
+                "שלח את הטקסט המעודכן של התוכנית (את כל הקבוצות כולן):",
+                parse_mode="Markdown",
+                reply_markup=cancel_button()
+            )
+            sheets_sessions[user_id] = {
+                "step": "fd_waiting_plan",
+                "branch": branch,
+                "plan_date": date_iso,
+            }
+        else:
+            await query.message.reply_text(
+                "✏️ *עריכת תוכנית*\n\nאיזה סניף ותאריך לערוך?\n"
+                "דוגמה: `/edit סירקין 26/6`",
+                parse_mode="Markdown",
+            )
         return
 
     # ── Plan wizard — confirm save ──
@@ -1872,6 +1954,75 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_sheets_callback(query, user_id, action, context)
         return
 
+    # ── Invoice4u payment sync ──────────────────────────────────────────────────
+    if action.startswith("inv4u_") or action == "inv4u_confirm_write":
+        await handle_inv4u_callback(query, user_id, action, context)
+        return
+
+    # ── /edit — branch picker ──
+    if action.startswith("edit_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        dates  = ws.next_training_dates(branch, 5)
+        rows   = []
+        for d in dates:
+            day_he = ws.day_name(d)
+            rows.append([InlineKeyboardButton(
+                f"{day_he} {d.day}/{d.month}",
+                callback_data=f"edit_date|{branch}|{d.isoformat()}"
+            )])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await query.edit_message_text(
+            f"✏️ *{branch} — איזה תאריך?*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    # ── /edit — date picked → load plan ──
+    if action.startswith("edit_date|"):
+        await query.answer()
+        parts    = action.split("|")
+        branch   = parts[1] if len(parts) > 1 else ""
+        date_iso = parts[2] if len(parts) > 2 else ""
+        if not branch or not date_iso:
+            await query.answer("נתונים חסרים")
+            return
+        from datetime import date as _date_cls
+        plan_date = _date_cls.fromisoformat(date_iso)
+        day_he    = ws.day_name(plan_date)
+        date_str  = f"{day_he} {plan_date.day}/{plan_date.month}"
+
+        try:
+            current = tp.load_plan_from_sheet(branch, plan_date)
+        except Exception:
+            current = None
+
+        if current:
+            lines = [f"📋 *תוכנית קיימת — {branch} | {date_str}*\n"]
+            for g_name, items in current.items():
+                lines.append(f"*{g_name}:*")
+                for row_type, val in (items.items() if isinstance(items, dict) else []):
+                    if val:
+                        lines.append(f"  {row_type}: {val}")
+            lines.append("\n✏️ שלח תוכנית מעודכנת לכתיבה:")
+        else:
+            lines = [f"📋 *{branch} | {date_str}* — אין תוכנית שמורה\n\nשלח תוכנית חדשה:"]
+
+        sheets_sessions[user_id] = {
+            "step": "fd_waiting_plan",
+            "branch": branch,
+            "plan_date": date_iso,
+        }
+        await query.edit_message_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")]
+            ])
+        )
+        return
+
     # Attendance callbacks handled separately (they call query.answer() themselves)
     if action.startswith("att_"):
         if action.startswith("att_start_"):
@@ -2486,6 +2637,192 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply = await call_claude(user_id, caption, image_b64=image_b64)
     await update.message.reply_text(reply)
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle XLS/XLSX file uploads — detect invoice4u report and start payment sync flow."""
+    doc = update.message.document
+    if not doc:
+        return
+    fname = doc.file_name or ""
+    if not (fname.endswith(".xls") or fname.endswith(".xlsx")):
+        return  # not a spreadsheet — ignore
+
+    user_id = str(update.effective_user.id)
+    await update.message.reply_text("📂 מוריד ומנתח קובץ...")
+
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        data = bytes(await file.download_as_bytearray())
+        records = invoice4u_reader.read_xls(data)
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה בקריאת הקובץ: {e}")
+        return
+
+    if not records:
+        await update.message.reply_text("⚠️ לא נמצאו רשומות בקובץ")
+        return
+
+    months = invoice4u_reader.available_months(records)
+
+    if len(months) == 1:
+        await _inv4u_start_month(update, context, user_id, records, months[0])
+    else:
+        # Multiple months — let user pick
+        rows = [
+            [InlineKeyboardButton(m, callback_data=f"inv4u_month|{m}")]
+            for m in months[-6:]  # last 6 months
+        ]
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        payment_sync_sessions[user_id] = {"records": records, "step": "pick_month"}
+        await update.message.reply_text(
+            f"📊 *קובץ invoice4u* — {len(records)} רשומות\n\nאיזה חודש לעבד?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+
+
+async def _inv4u_start_month(update, context, user_id: str, records: list, month_key: str):
+    """Start processing invoice4u records for a specific month ('Month YYYY')."""
+    parts     = month_key.rsplit(" ", 1)
+    month_he  = parts[0]
+    year      = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 2026
+    month_recs = invoice4u_reader.filter_month(records, month_he, year)
+    summ       = invoice4u_reader.summarise(month_recs)
+
+    # update may be a telegram.Update or a CallbackQuery — both have .message
+    loading_msg = await update.message.reply_text("⏳ טוען תלמידים...")
+
+    try:
+        sheet_students = invoice4u_sync.load_all_students()
+    except Exception as e:
+        await loading_msg.edit_text(f"❌ שגיאה בטעינת תלמידים: {e}")
+        return
+
+    mapping  = payment_matcher.load_mapping()
+    monthly  = summ["monthly"] + summ["monthly_unusual"]
+    belts    = summ["belt"]
+
+    matched_monthly = payment_matcher.match_records(monthly, sheet_students, mapping)
+    matched_belts   = payment_matcher.match_records(belts,   sheet_students, mapping)
+
+    auto_cnt    = sum(1 for m in matched_monthly if m["status"] in ("saved", "auto"))
+    unknown_cnt = sum(1 for m in matched_monthly if m["status"] == "unknown")
+    belt_cnt    = len(belts)
+    skip_cnt    = len(summ["club_transfer"]) + len(summ["other"])
+
+    payment_sync_sessions[user_id] = {
+        "step":            "review",
+        "month":           month_he,
+        "year":            year,
+        "matched_monthly": matched_monthly,
+        "matched_belts":   matched_belts,
+        "unknowns":        [m for m in matched_monthly if m["status"] == "unknown"],
+        "current_unknown": 0,
+        "sheet_students":  sheet_students,
+        "mapping":         mapping,
+    }
+
+    lines = [
+        f"📊 *invoice4u — {month_he} {year}*\n",
+        f"• תשלומים חודשיים: {len(monthly)}",
+        f"  ✅ {auto_cnt} זוהו אוטומטית",
+    ]
+    if unknown_cnt:
+        lines.append(f"  ❓ {unknown_cnt} לא זוהו")
+    if belt_cnt:
+        lines.append(f"• 🥋 {belt_cnt} חגורות")
+    if skip_cnt:
+        lines.append(f"• ⛔ {skip_cnt} מדולגים (העברות/אחר)")
+
+    rows = [[InlineKeyboardButton("▶️ בדיקה — התחל", callback_data="inv4u_start_review")]]
+    rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+
+    await loading_msg.edit_text("\n".join(lines), parse_mode="Markdown",
+                                reply_markup=InlineKeyboardMarkup(rows))
+
+
+def _inv4u_unknown_prompt(ss: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Build prompt for current unknown record."""
+    unknowns = ss.get("unknowns", [])
+    idx      = ss.get("current_unknown", 0)
+    total    = len(unknowns)
+
+    if idx >= total:
+        return "", InlineKeyboardMarkup([])
+
+    item = unknowns[idx]
+    rec  = item["record"]
+    cname = rec["customer_name"]
+    amount = rec["amount"]
+    date_s = rec["date"]
+    children = rec.get("children", [])
+    child_str = " / ".join(children) if children else ""
+
+    text = (
+        f"❓ *תשלום לא ידוע* ({idx + 1}/{total})\n\n"
+        f"שם בחשבונית: *{cname}*"
+    )
+    if child_str:
+        text += f"\nילד/ים: *{child_str}*"
+    text += f"\nסכום: *{amount}₪* | תאריך: {date_s}\n\n"
+    text += "מה שם הספורטאי/ת? (שלח שם לחיפוש)"
+
+    buttons = [[InlineKeyboardButton("⏭ דלג", callback_data="inv4u_unknown_skip")]]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def _inv4u_show_summary(update_or_query, user_id: str):
+    """Show the final confirmation summary before writing to sheets."""
+    ss = payment_sync_sessions.get(user_id, {})
+    matched_monthly = ss.get("matched_monthly", [])
+    matched_belts   = ss.get("matched_belts", [])
+    month_he        = ss.get("month", "")
+    year            = ss.get("year", "")
+
+    to_write = [m for m in matched_monthly if m["status"] in ("saved", "auto", "confirmed")]
+    skipped  = [m for m in matched_monthly if m["status"] in ("unknown", "skipped")]
+
+    lines = [f"✅ *סיכום לאישור — {month_he} {year}*\n"]
+    lines.append(f"📋 *{len(to_write)} תשלומים לכתיבה:*")
+    for m in to_write[:15]:
+        s = m["student"]
+        name = f"{s['first']} {s['last']}" if s else "?"
+        branch = s.get("branch", "") if s else ""
+        lines.append(f"  • {name} ({branch}) — {m['record']['amount']}₪")
+    if len(to_write) > 15:
+        lines.append(f"  … ועוד {len(to_write) - 15}")
+
+    if matched_belts:
+        lines.append(f"\n🥋 *{len(matched_belts)} חגורות:*")
+        for m in matched_belts:
+            s = m.get("student")
+            rec = m["record"]
+            if s:
+                lines.append(f"  • {s['first']} {s['last']} ({s.get('branch','')}) — {rec['date']}")
+            else:
+                lines.append(f"  • {rec['customer_name']} — {rec['date']}")
+
+    if skipped:
+        lines.append(f"\n❓ *{len(skipped)} לא זוהו (ידולגו):*")
+        for m in skipped[:5]:
+            lines.append(f"  • {m['record']['customer_name']} — {m['record']['amount']}₪")
+        if len(skipped) > 5:
+            lines.append(f"  … ועוד {len(skipped) - 5}")
+
+    ss["to_write"] = to_write
+    payment_sync_sessions[user_id] = ss
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ כתוב הכל לגיליון", callback_data="inv4u_confirm_write")],
+        [InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+    ])
+
+    msg = "\n".join(lines)
+    if hasattr(update_or_query, "message"):
+        await update_or_query.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
+    else:
+        await update_or_query.edit_message_text(msg, parse_mode="Markdown", reply_markup=markup)
 
 
 async def _plan_wizard_extract(branch: str, group: str, plan_text: str) -> list[str]:
@@ -4526,6 +4863,325 @@ async def cmd_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_long(update, "\n".join(lines), parse_mode="Markdown")
 
 
+async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/edit [סניף] [תאריך] — עריכת או צפייה בתוכנית קיימת בגיליון."""
+    user_id = str(update.effective_user.id)
+    args = context.args or []
+
+    branch   = None
+    plan_date = None
+
+    # Parse args: "/edit סירקין 26/6" or "/edit סירקין" or "/edit"
+    if args:
+        # Try to find branch
+        for b in tp.BRANCH_TABS:
+            for a in args:
+                if b in a or a in b:
+                    branch = b
+                    break
+            if branch:
+                break
+        # Try to find date
+        from datetime import date as _date_cls
+        import re as _re
+        for a in args:
+            m = _re.match(r'(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?', a)
+            if m:
+                day, mo = int(m.group(1)), int(m.group(2))
+                yr = int(m.group(3)) if m.group(3) else _date_cls.today().year
+                if yr < 100: yr += 2000
+                try:
+                    plan_date = _date_cls(yr, mo, day)
+                except ValueError:
+                    pass
+
+    # If branch+date known → load and show current plan
+    if branch and plan_date:
+        await update.message.chat.send_action("typing")
+        try:
+            current = tp.load_plan_from_sheet(branch, plan_date)
+        except Exception as e:
+            current = None
+        day_he = ws.day_name(plan_date)
+        date_str = f"{day_he} {plan_date.day}/{plan_date.month}/{plan_date.year}"
+
+        if current:
+            lines = [f"📋 *תוכנית קיימת — {branch} | {date_str}*\n"]
+            for g_name, items in current.items():
+                lines.append(f"*{g_name}:*")
+                for row_type, val in items.items():
+                    if val:
+                        lines.append(f"  {row_type}: {val}")
+            lines.append(f"\n✏️ לעדכן — שלח תוכנית חדשה ואז לחץ *שמור*")
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        f"💾 שמור עדכון — {branch} | {plan_date.day}/{plan_date.month}",
+                        callback_data=f"plan_save_quick|{branch}|{plan_date.isoformat()}"
+                    )],
+                    [InlineKeyboardButton("✏️ ערוך", callback_data=f"plan_edit_current")],
+                ])
+            )
+            sheets_sessions[user_id] = {
+                "step": "fd_waiting_plan",
+                "branch": branch,
+                "plan_date": plan_date.isoformat(),
+            }
+        else:
+            await update.message.reply_text(
+                f"📋 *{branch} | {date_str}* — אין תוכנית שמורה\n\n"
+                "שלח תוכנית לשמירה:",
+                parse_mode="Markdown",
+                reply_markup=cancel_button()
+            )
+            sheets_sessions[user_id] = {
+                "step": "fd_waiting_plan",
+                "branch": branch,
+                "plan_date": plan_date.isoformat(),
+            }
+        return
+
+    # If only branch → pick date from next training dates
+    if branch:
+        dates = ws.next_training_dates(branch, 5)
+        rows = []
+        for d in dates:
+            day_he = ws.day_name(d)
+            label = f"{day_he} {d.day}/{d.month}"
+            rows.append([InlineKeyboardButton(
+                label, callback_data=f"edit_date|{branch}|{d.isoformat()}"
+            )])
+        rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+        await update.message.reply_text(
+            f"✏️ *עריכת תוכנית — {branch}*\n\nאיזה תאריך?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    # No args → pick branch
+    branch_rows = [
+        [InlineKeyboardButton(b, callback_data=f"edit_branch|{b}")]
+        for b in tp.BRANCH_TABS
+    ]
+    branch_rows.append([InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")])
+    await update.message.reply_text(
+        "✏️ *עריכת תוכנית — איזה סניף?*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(branch_rows)
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Invoice4u payment sync — callbacks + text handler
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def handle_inv4u_callback(query, user_id: str, action: str, context):
+    """Handle all inv4u_* callbacks for the payment sync flow."""
+    await query.answer()
+    ss = payment_sync_sessions.get(user_id, {})
+
+    # ── Month selection from multi-month file ──
+    if action.startswith("inv4u_month|"):
+        month_key = action.split("|", 1)[1]
+        records   = ss.get("records", [])
+        payment_sync_sessions.pop(user_id, None)
+        await _inv4u_start_month(query, context, user_id, records, month_key)
+        return
+
+    # ── Start review (begin handling unknowns or go straight to summary) ──
+    if action == "inv4u_start_review":
+        unknowns = ss.get("unknowns", [])
+        if unknowns:
+            ss["current_unknown"] = 0
+            ss["step"] = "unknown_review"
+            payment_sync_sessions[user_id] = ss
+            text, markup = _inv4u_unknown_prompt(ss)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await _inv4u_show_summary(query, user_id)
+        return
+
+    # ── Skip current unknown ──
+    if action == "inv4u_unknown_skip":
+        idx = ss.get("current_unknown", 0)
+        unknowns = ss.get("unknowns", [])
+        unknowns[idx]["status"] = "skipped"
+        idx += 1
+        ss["current_unknown"] = idx
+        payment_sync_sessions[user_id] = ss
+        if idx < len(unknowns):
+            text, markup = _inv4u_unknown_prompt(ss)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await query.edit_message_text("✅ סיום זיהוי — מכין סיכום...")
+            await _inv4u_show_summary(query, user_id)
+        return
+
+    # ── User picked a student for unknown ──
+    if action.startswith("inv4u_pick_student|"):
+        parts   = action.split("|")
+        s_first = parts[1] if len(parts) > 1 else ""
+        s_last  = parts[2] if len(parts) > 2 else ""
+        s_branch = parts[3] if len(parts) > 3 else ""
+
+        # Find student in sheet_students
+        sheet_students = ss.get("sheet_students", [])
+        student = next(
+            (s for s in sheet_students
+             if s["first"] == s_first and s["last"] == s_last
+             and s.get("branch") == s_branch),
+            None
+        )
+        if not student:
+            student = {"first": s_first, "last": s_last, "branch": s_branch,
+                       "sheet": "", "row_idx": 0}
+
+        # Save in mapping
+        idx      = ss.get("current_unknown", 0)
+        unknowns = ss.get("unknowns", [])
+        if idx < len(unknowns):
+            item = unknowns[idx]
+            rec  = item["record"]
+            mapping = ss.get("mapping", {})
+            mapping = payment_matcher.add_to_mapping(
+                rec.get("customer_id", ""), rec["customer_name"], student, mapping
+            )
+            ss["mapping"] = mapping
+            unknowns[idx]["status"]  = "confirmed"
+            unknowns[idx]["student"] = student
+
+            # Also update matched_monthly entry
+            matched_monthly = ss.get("matched_monthly", [])
+            for m in matched_monthly:
+                if m.get("mapping_key") == item.get("mapping_key"):
+                    m["status"]  = "confirmed"
+                    m["student"] = student
+                    break
+
+            idx += 1
+            ss["current_unknown"] = idx
+            ss["unknowns"]        = unknowns
+            payment_sync_sessions[user_id] = ss
+
+        if idx < len(unknowns):
+            text, markup = _inv4u_unknown_prompt(ss)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await query.edit_message_text("✅ כל התשלומים זוהו — מכין סיכום...")
+            await _inv4u_show_summary(query, user_id)
+        return
+
+    # ── Final confirm — write to sheets ──
+    if action == "inv4u_confirm_write":
+        await query.edit_message_text("⏳ כותב לגיליון...")
+        to_write = ss.get("to_write", [])
+        matched_belts = ss.get("matched_belts", [])
+        month_he = ss.get("month", "")
+
+        written    = []
+        belt_lines = []
+        errors     = []
+
+        # Write monthly payments in batch
+        batch_items = []
+        for m in to_write:
+            s = m.get("student")
+            if not s or not s.get("sheet"):
+                continue
+            batch_items.append({
+                "student": s,
+                "month":   month_he,
+                "amount":  m["record"]["amount"],
+            })
+
+        if batch_items:
+            try:
+                results = invoice4u_sync.write_monthly_batch(batch_items)
+                written = batch_items
+            except Exception as e:
+                errors.append(f"תשלומים חודשיים: {e}")
+
+        # Write belt payments
+        for m in matched_belts:
+            rec = m["record"]
+            parent = rec.get("parent_name", rec["customer_name"])
+            children = rec.get("children", [])
+            first_name = children[0] if children else parent.split()[0]
+            last_name  = parent.split()[-1] if len(parent.split()) > 1 else ""
+            branch     = m["student"]["branch"] if m.get("student") else ""
+            try:
+                line = invoice4u_sync.write_belt_payment(
+                    first_name, last_name, branch, rec["date"]
+                )
+                belt_lines.append(line)
+            except Exception as e:
+                errors.append(f"חגורה {first_name}: {e}")
+
+        unknowns_left = sum(
+            1 for m in ss.get("matched_monthly", [])
+            if m["status"] in ("unknown", "skipped")
+        )
+
+        summary = invoice4u_sync.format_sync_summary(
+            written, belt_lines, [], [], unknowns_left
+        )
+        if errors:
+            summary += "\n\n⚠️ שגיאות:\n" + "\n".join(f"• {e}" for e in errors)
+
+        payment_sync_sessions.pop(user_id, None)
+        await query.edit_message_text(summary, parse_mode="Markdown")
+        return
+
+
+async def handle_inv4u_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Handle text input during invoice4u unknown-name flow. Returns True if consumed."""
+    user_id = str(update.effective_user.id)
+    ss = payment_sync_sessions.get(user_id)
+    if not ss or ss.get("step") != "unknown_review":
+        return False
+
+    text = update.message.text.strip()
+    if text.lower() in ("דלג", "skip", "ביטול", "cancel"):
+        # Treat as skip
+        idx = ss.get("current_unknown", 0)
+        unknowns = ss.get("unknowns", [])
+        if idx < len(unknowns):
+            unknowns[idx]["status"] = "skipped"
+            idx += 1
+            ss["current_unknown"] = idx
+            payment_sync_sessions[user_id] = ss
+        if idx < len(unknowns):
+            text_msg, markup = _inv4u_unknown_prompt(ss)
+            await update.message.reply_text(text_msg, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await _inv4u_show_summary(update, user_id)
+        return True
+
+    # Search for student
+    sheet_students = ss.get("sheet_students", [])
+    results = payment_matcher.search_student(text, sheet_students)
+    if not results:
+        await update.message.reply_text("❌ לא מצאתי — נסה שם אחר, או לחץ ⏭ לדלג")
+        return True
+
+    buttons = []
+    for s in results[:6]:
+        label = f"{s['first']} {s['last']} ({s.get('branch', '')})"
+        data  = f"inv4u_pick_student|{s['first']}|{s['last']}|{s.get('branch', '')}"
+        buttons.append([InlineKeyboardButton(label, callback_data=data)])
+    buttons.append([InlineKeyboardButton("⏭ דלג", callback_data="inv4u_unknown_skip")])
+
+    await update.message.reply_text(
+        f"🔍 תוצאות עבור *{text}*:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    return True
+
+
 def main():
     # Clear undo file on startup — prevents stale undo buttons from prior run
     att.clear_dropout_undo()
@@ -4555,9 +5211,11 @@ def main():
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("dropout", cmd_dropout))
     app.add_handler(CommandHandler("contacts", contacts_command))
+    app.add_handler(CommandHandler("edit", cmd_edit))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     # Background jobs
     if TOPAZ_CHAT_ID and app.job_queue:
         app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
