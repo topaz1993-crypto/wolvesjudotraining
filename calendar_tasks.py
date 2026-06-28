@@ -385,13 +385,16 @@ def format_events_for_claude(events: list, date_from: date, date_to: date) -> st
 
     today = datetime.now().date()
 
+    DAY_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
+
     def label(d: date) -> str:
+        day_name = DAY_HE[d.weekday()]
+        date_str = d.strftime('%d/%m/%Y')
         if d == today:
-            return "היום"
+            return f"היום — יום {day_name} {date_str}"
         if d == today + timedelta(days=1):
-            return "מחר"
-        days = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-        return f"יום {days[d.weekday()]} {d.strftime('%d/%m')}"
+            return f"מחר — יום {day_name} {date_str}"
+        return f"יום {day_name} {date_str}"
 
     by_date: dict[str, list] = {}
     for ev in events:

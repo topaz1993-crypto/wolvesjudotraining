@@ -2754,11 +2754,17 @@ async def _calendar_query(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
         # Limit to 40 events max to avoid token overflow
         events = events[:40]
         events_text = cal.format_events_for_claude(events, date_from, date_to)
+        from datetime import date as _date
+        _today = _date.today()
+        _day_names = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
+        _today_str = f"יום {_day_names[_today.weekday()]} {_today.strftime('%d/%m/%Y')}"
         system = (
-            "אתה עוזר אישי של טופז זבארי, מאמן ג'ודו. "
+            f"אתה עוזר אישי של טופז זבארי, מאמן ג'ודו. "
+            f"היום הוא {_today_str}. "
             "קיבלת נתונים מ-Google Calendar שלו. "
             "סכם את האירועים בצורה מסודרת ושימושית. "
             "הדגש אימוני ג'ודו, משימות דחופות ואירועים חשובים. "
+            "חשוב: כתוב את יום השבוע והתאריך בדיוק כפי שמופיע בנתונים — אל תחשב לבד. "
             "ענה בעברית, קצר וברור."
         )
         # Fresh Claude call — no history, to avoid token overflow
