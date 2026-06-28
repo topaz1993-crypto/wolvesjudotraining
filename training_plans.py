@@ -489,17 +489,30 @@ def _find_or_create_date_col(service, tab_name: str, plan_date) -> int:
     return new_col
 
 
+def _norm_group(s: str) -> str:
+    return s.strip().replace("–", "-").replace("—", "-").replace("–", "-").replace("—", "-")
+
+
+def _group_matches(keyword: str, cell: str) -> bool:
+    """Match group name precisely: exact first; substring only if both >= 3 chars."""
+    if keyword == cell:
+        return True
+    if len(keyword) >= 3 and len(cell) >= 3:
+        return keyword in cell or cell in keyword
+    return False
+
+
 def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
     """Return 0-based row indices that belong to a group block matching keyword."""
-    group_keyword = group_keyword.strip().replace("–", "-").replace("—", "-")
+    nk = _norm_group(group_keyword)
     block_start = None
     block_rows = []
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip():
             if block_start is not None:
-                cell = rows[block_start][1].strip().replace("–", "-").replace("—", "-")
-                if group_keyword in cell or cell in group_keyword:
+                cell = _norm_group(rows[block_start][1])
+                if _group_matches(nk, cell):
                     return block_rows
             block_start = i
             block_rows = [i]
@@ -507,8 +520,8 @@ def _find_group_rows_for_group(rows: list, group_keyword: str) -> list[int]:
             block_rows.append(i)
 
     if block_start is not None:
-        cell = rows[block_start][1].strip().replace("–", "-").replace("—", "-")
-        if group_keyword in cell or cell in group_keyword:
+        cell = _norm_group(rows[block_start][1])
+        if _group_matches(nk, cell):
             return block_rows
     return []
 
