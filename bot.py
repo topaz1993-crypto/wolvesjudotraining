@@ -600,14 +600,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Build history context from archive
     extra_context = ""
-    for branch in ["חגור", "סירקין", "נווה ירק", "אהרונוביץ", "איפון פייט", "פונקציונלי", "נבחרת"]:
-        if branch in user_text:
-            for group in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ו", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז-בוגרים", 'ט-י"ב']:
-                if group in user_text:
-                    extra_context = get_recent_trainings(branch, group)
+    import training_archive as _arc
+    from datetime import date as _today_cls
+    detected_branch = next((b for b in tp.BRANCH_TABS if b in user_text), None)
+    if detected_branch:
+        all_group_names = PLAN_GROUPS.get(detected_branch, [])
+        if all_group_names:
+            extra_context = _arc.suggest_context_for_claude(detected_branch, all_group_names)
+        else:
+            for grp in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ו", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז- בוגרים", 'ט-י"ב', "נבחרת"]:
+                if grp in user_text:
+                    extra_context = _arc.format_history(detected_branch, grp, n=3)
                     break
-            break
 
     # Inject live data when relevant
     data_context = _build_data_context(user_text)
