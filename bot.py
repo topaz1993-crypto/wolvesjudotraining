@@ -3749,29 +3749,50 @@ async def email_monitor_job(context):
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def daily_training_reminder_job(context):
-    """Runs every morning at 07:00 Israel time — sends today's training schedule."""
+    """Runs every morning at 07:00 Israel time — daily summary with calendar + training."""
     if not TOPAZ_CHAT_ID:
         return
     hour = datetime.now().hour
     if hour != 7:
         return
-    schedule = ws.today_schedule()
-    if not schedule:
-        return  # no training today
 
+    from datetime import date as _date
+    today = _date.today()
     day_name = ws.today_name()
-    lines = [f"🥋 *בוקר טוב! יום {day_name} — לוז אימונים:*\n"]
-    for entry in schedule:
-        branch = entry["branch"]
-        lines.append(f"📍 *{branch}*")
-        for g in entry["groups"]:
-            lines.append(f"  {g['time']} — {g['name']}")
-        # Link to sheet
-        tab = entry.get("tab", branch)
+    date_str = today.strftime("%d/%m/%Y")
+    schedule = ws.today_schedule()
+
+    lines = [f"🌅 *בוקר טוב! יום {day_name} {date_str}*\n"]
+
+    # ── גוגל יומן היום ──
+    try:
+        events = cal.get_events_range(today, today)
+        if events:
+            lines.append("📅 *יומן היום:*")
+            for ev in events:
+                time_part = f" {ev['time']}" if ev["time"] else ""
+                lines.append(f"  {ev['emoji']}{time_part} {ev['title']}")
+            lines.append("")
+    except Exception as e:
+        log.warning("daily calendar fetch error: %s", e)
+
+    # ── לוז אימונים ──
+    if schedule:
         from training_plans import SPREADSHEET_ID
+        lines.append("🥋 *אימונים היום:*")
+        for entry in schedule:
+            branch = entry["branch"]
+            lines.append(f"  📍 *{branch}*")
+            for g in entry["groups"]:
+                lines.append(f"    {g['time']} — {g['name']}")
         url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit#gid=0"
-        lines.append(f"  🔗 [פתח תוכנית]({url})")
-        lines.append("")
+        lines.append(f"\n  🔗 [פתח תוכניות אימון]({url})")
+    else:
+        lines.append("🏖️ *אין אימונים היום*")
+
+    # שלח רק אם יש תוכן מעבר לכותרת
+    if len(lines) <= 2:
+        return
 
     try:
         await context.bot.send_message(
