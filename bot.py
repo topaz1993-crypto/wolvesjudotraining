@@ -278,7 +278,6 @@ def plan_buttons() -> InlineKeyboardMarkup:
 def approved_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 שמור בגיליון תוכניות", callback_data="menu_plan_save")],
-        [InlineKeyboardButton("📋 תוכנית חדשה", callback_data="new_plan")],
     ])
 
 
@@ -664,24 +663,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_plans[user_id] = {"reply": reply, "original": user_text}
             save_json(PENDING_FILE, pending_plans)
 
-        cal_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 הוסף ליומן", callback_data="quick_cal")]
-        ])
-
         save_plan_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 שמור בגיליון", callback_data="menu_plan_save"),
-             InlineKeyboardButton("📅 הוסף ליומן", callback_data="quick_cal")],
+            [InlineKeyboardButton("💾 שמור בגיליון", callback_data="menu_plan_save")],
         ])
 
         chunks = [reply[i:i+4096] for i in range(0, len(reply), 4096)]
         for i, chunk in enumerate(chunks):
-            if i == len(chunks) - 1:
-                if is_training_plan:
-                    markup = save_plan_markup
-                else:
-                    markup = cal_markup
-            else:
-                markup = None
+            markup = save_plan_markup if (i == len(chunks) - 1 and is_training_plan) else None
             await update.message.reply_text(chunk, reply_markup=markup)
 
 
