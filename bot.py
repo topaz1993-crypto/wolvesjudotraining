@@ -5503,6 +5503,47 @@ async def cmd_week_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_long(update, "\n".join(lines), parse_mode="Markdown")
 
+
+async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/add_missing — מוסיף את הסטודנטים החסרים שזוהו ממיילי ההרשמה."""
+    await update.message.reply_text("⏳ מוסיף סטודנטים חסרים...")
+    results = []
+
+    # לילה יפני
+    lyla_to_add = [
+        ("יובל עשור", "ח", "סירקין"),
+    ]
+    for name, grade, branch in lyla_to_add:
+        try:
+            added = lyla.add_student_direct(name, grade, branch)
+            results.append(f"{'✔' if added else '⚠ כבר קיים'} {name} — לילה יפני ({grade}, {branch})")
+        except Exception as e:
+            results.append(f"❌ {name} — שגיאה: {e}")
+
+    # מחנה קיץ
+    camp_to_add = [
+        ("איתן כהן",  "ח", "סירקין", "שבוע ראשון"),
+        ("עידו כהן",  "ג", "סירקין", "שבועיים"),
+        ("זיו אהרוני", "", "סירקין", "שבועיים"),
+    ]
+    try:
+        existing_camp = {s["name"] for s in camp.get_students()}
+    except Exception:
+        existing_camp = set()
+
+    for name, grade, branch, week in camp_to_add:
+        if name in existing_camp:
+            results.append(f"⚠ כבר קיים: {name} — מחנה קיץ")
+            continue
+        try:
+            camp.add_student(name, grade, branch, week)
+            results.append(f"✔ {name} — מחנה קיץ ({grade or '?'}, {week})")
+        except Exception as e:
+            results.append(f"❌ {name} — שגיאה: {e}")
+
+    await update.message.reply_text("\n".join(results) if results else "לא נמצא כלום להוסיף")
+
+
 async def cmd_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/delete_plan [סניף] [תאריך] — מחיקת תוכנית מהגיליון."""
     if not context.args or len(context.args) < 2:
@@ -5578,6 +5619,7 @@ def main():
     app.add_handler(CommandHandler("message", cmd_message))
     app.add_handler(CommandHandler("week_plan", cmd_week_plan))
     app.add_handler(CommandHandler("registrations", cmd_registrations))
+    app.add_handler(CommandHandler("add_missing", cmd_add_missing))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
