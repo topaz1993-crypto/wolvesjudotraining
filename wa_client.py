@@ -172,3 +172,18 @@ def send_message(phone: str, message: str) -> bool:
 
 def is_connected() -> bool:
     return get_status().get("connected", False)
+
+
+def _process_alive() -> bool:
+    """Return True if the WA bridge subprocess is running or the HTTP bridge responds."""
+    global _process
+    if _process is not None and _process.poll() is None:
+        return True
+    httpx = _get_http()
+    if not httpx:
+        return False
+    try:
+        httpx.get(f"{BASE_URL}/status", headers=HEADERS, timeout=2)
+        return True
+    except Exception:
+        return False
