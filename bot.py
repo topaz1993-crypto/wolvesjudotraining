@@ -37,6 +37,7 @@ import invoice4u_sync
 import payment_matcher
 import registration_sync
 import conversation_log
+import wa_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -2188,6 +2189,38 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"📅 לאיזה תאריך לשמור את התוכנית ל-*{branch} {group}*?\n(לדוגמה: `26/6` או `היום`)",
                 parse_mode="Markdown",
             )
+
+
+    # ── WhatsApp approval callbacks ───────────────────────────────
+    if action.startswith("wa_send|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        pending = context.bot_data.get(key)
+        if not pending:
+            await query.edit_message_text("❌ ההודעה כבר לא קיימת")
+            return
+        if not wa_client.is_connected():
+            await query.edit_message_text("❌ WhatsApp לא מחובר — שלח /wa\_connect")
+            return
+        ok = wa_client.send_message(pending["phone"], pending["message"])
+        if ok:
+            await query.edit_message_text(f"✅ נשלח בהצלחה ל-{pending['phone']}")
+            context.bot_data.pop(key, None)
+        else:
+            await query.edit_message_text("❌ שגיאה בשליחה — בדוק /wa\_status")
+        return
+
+    if action.startswith("wa_cancel|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        context.bot_data.pop(key, None)
+        await query.edit_message_text("❌ שליחה בוטלה")
+        return
+
+    if action.startswith("wa_edit|"):
+        await query.answer("✏️ שלח את הטקסט המעודכן")
+        return
+
 
 
 def attendance_student_keyboard(session: dict) -> InlineKeyboardMarkup:
@@ -4654,6 +4687,9 @@ def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
 
 async def on_startup(app):
     """Notify Topaz when bot comes online."""
+    # Start WhatsApp bridge service
+    import threading
+    threading.Thread(target=wa_client.start_service, daemon=True).start()
     if TOPAZ_CHAT_ID:
         from datetime import datetime as _dt
         now = _dt.now().strftime("%d/%m/%Y %H:%M")
@@ -5563,15 +5599,27 @@ async def cmd_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import urllib.parse
     wa_url = f"https://wa.me/{wa_number}?text={urllib.parse.quote(msg)}" if wa_number else ""
 
-    reply = (
-        f"📲 *הודעה ל{parent_name}* ({phone})\n"
-        f"ספורטאי: *{name}*\n\n"
-        f"```\n{msg}\n```\n\n"
-    )
-    if wa_url:
-        reply += f"[🟢 פתח ב-WhatsApp]({wa_url})"
-
-    await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
+    # If WhatsApp is connected — send with approval button
+    # Otherwise fall back to wa.me link
+    if wa_number and wa_client.is_connected():
+        await wa_send_with_approval(
+            context,
+            chat_id=str(update.effective_chat.id),
+            phone=wa_number,
+            recipient_name=f"{parent_name} (הורה של {first_name})",
+            message=msg
+        )
+    else:
+        reply = (
+            f"📲 *הודעה ל{parent_name}* ({phone})\n"
+            f"ספורטאי: *{name}*\n\n"
+            f"```\n{msg}\n```\n\n"
+        )
+        if wa_url:
+            reply += f"[🟢 פתח ב-WhatsApp]({wa_url})"
+        if not wa_client.is_connected():
+            reply += "\n\n_💡 חבר WhatsApp עם /wa\_connect לשליחה אוטומטית_"
+        await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def cmd_activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/activate [סניף] [שם] — החזרת ספורטאי לפעיל."""
@@ -5782,6 +5830,84 @@ async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/wa_connect — מחבר WhatsApp דרך QR."""
+    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
+        return
+    status = wa_client.get_status()
+    if status.get("connected"):
+        await update.message.reply_text("✅ WhatsApp כבר מחובר!")
+        return
+    await update.message.reply_text("⏳ מייצר QR — רגע...")
+    # Wait up to 15s for QR
+    for _ in range(15):
+        qr = wa_client.get_qr_base64()
+        if qr:
+            import io, base64
+            img_bytes = base64.b64decode(qr)
+            await update.message.reply_photo(
+                photo=io.BytesIO(img_bytes),
+                caption="📱 סרוק את ה-QR הזה מהווטסאפ שלך (⋮ → מכשירים מקושרים → קשר מכשיר)"
+            )
+            return
+        import asyncio
+        await asyncio.sleep(1)
+    await update.message.reply_text("❌ QR לא הגיע — נסה שוב עוד 10 שניות")
+
+
+async def cmd_wa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/wa_status — מצב חיבור WhatsApp."""
+    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
+        return
+    status = wa_client.get_status()
+    if status.get("connected"):
+        await update.message.reply_text("✅ WhatsApp מחובר ופעיל")
+    else:
+        st = status.get("status", "לא ידוע")
+        await update.message.reply_text(
+            f"🔴 WhatsApp לא מחובר\nמצב: `{st}`\n\nשלח /wa\_connect להתחברות",
+            parse_mode="Markdown"
+        )
+
+
+async def wa_send_with_approval(
+    context,
+    chat_id: str,
+    phone: str,
+    recipient_name: str,
+    message: str
+):
+    """
+    שולח הודעת WhatsApp עם כפתור אישור בטלגרם.
+    בעת אישור: שולח את ההודעה בפועל.
+    """
+    import json
+    # Store pending message in context
+    key = f"wa_{phone}_{int(__import__('time').time())}"
+    context.bot_data[key] = {"phone": phone, "message": message}
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ שלח", callback_data=f"wa_send|{key}"),
+            InlineKeyboardButton("✏️ ערוך", callback_data=f"wa_edit|{key}"),
+            InlineKeyboardButton("❌ בטל", callback_data=f"wa_cancel|{key}"),
+        ]
+    ])
+    preview = (
+        f"📤 *שולח ל: {recipient_name}* ({phone})\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"{message}\n"
+        f"━━━━━━━━━━━━━━━━"
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=preview,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+
+
 async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/add_missing — מוסיף את הסטודנטים החסרים שזוהו ממיילי ההרשמה."""
     await update.message.reply_text("⏳ מוסיף סטודנטים חסרים...")
@@ -5960,6 +6086,8 @@ def main():
     app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CommandHandler("add_missing", cmd_add_missing))
     app.add_handler(CommandHandler("conv_log", cmd_conv_log))
+    app.add_handler(CommandHandler("wa_connect", cmd_wa_connect))
+    app.add_handler(CommandHandler("wa_status", cmd_wa_status))
     app.add_handler(CommandHandler("migrate_history", cmd_migrate_history))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))
