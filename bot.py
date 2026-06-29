@@ -5504,6 +5504,61 @@ async def cmd_week_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_long(update, "\n".join(lines), parse_mode="Markdown")
 
 
+
+async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/update_student [שם] [שדה]=[ערך]
+    שדות אפשריים: סניף, כיתה, הערות
+    לדוגמה: /update_student יובל עשור סניף=חגור
+    """
+    args_raw = " ".join(context.args or [])
+    # split on field=value at the end
+    import re as _re
+    m = _re.match(r"^(.+?)\s+(סניף|כיתה|הערות|חולצה)=(.+)$", args_raw)
+    if not m:
+        await update.message.reply_text(
+            "❌ שימוש:\n/update_student [שם] [שדה]=[ערך]\n\n"
+            "שדות: סניף, כיתה, הערות, חולצה\n"
+            "לדוגמה: /update_student יובל עשור סניף=חגור"
+        )
+        return
+
+    name      = m.group(1).strip()
+    field_heb = m.group(2).strip()
+    value     = m.group(3).strip()
+
+    field_map = {"סניף": "branch", "כיתה": "grade", "הערות": "notes", "חולצה": "shirt"}
+    field_eng = field_map[field_heb]
+
+    updated_in = []
+    errors     = []
+
+    # Try לילה יפני
+    try:
+        if lyla.update_student(name, field_eng, value):
+            updated_in.append("לילה יפני 🌸")
+    except Exception as e:
+        errors.append(f"לילה יפני: {e}")
+
+    # Try מחנה קיץ
+    try:
+        if camp.update_student(name, field_eng, value):
+            updated_in.append("מחנה קיץ ☀️")
+    except Exception as e:
+        errors.append(f"מחנה קיץ: {e}")
+
+    if updated_in:
+        sheets_str = " + ".join(updated_in)
+        await update.message.reply_text(
+            f"✅ עודכן: *{name}*\n{field_heb} → {value}\n\n📋 גיליונות: {sheets_str}",
+            parse_mode="Markdown"
+        )
+    else:
+        msg = f"⚠️ לא נמצא *{name}* באף גיליון."
+        if errors:
+            msg += "\n" + "\n".join(errors)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/add_missing — מוסיף את הסטודנטים החסרים שזוהו ממיילי ההרשמה."""
     await update.message.reply_text("⏳ מוסיף סטודנטים חסרים...")
@@ -5511,7 +5566,7 @@ async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # לילה יפני
     lyla_to_add = [
-        ("יובל עשור", "ח", "סירקין"),
+        ("יובל עשור", "ח", "חגור"),
     ]
     for name, grade, branch in lyla_to_add:
         try:
@@ -5620,6 +5675,7 @@ def main():
     app.add_handler(CommandHandler("week_plan", cmd_week_plan))
     app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CommandHandler("add_missing", cmd_add_missing))
+    app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

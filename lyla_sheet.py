@@ -212,6 +212,34 @@ def format_sheet():
     return students
 
 
+
+
+def update_student(name: str, field: str, value: str) -> bool:
+    """
+    מעדכן שדה של ספורטאי בגיליון לילה יפני.
+    field: 'grade' / 'branch' / 'notes'
+    """
+    col_map = {'grade': 2, 'branch': 3, 'notes': 5}
+    col_idx = col_map.get(field)
+    if col_idx is None:
+        raise ValueError(f'שדה לא מוכר: {field}')
+    service = _get_service()
+    rows = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID, range=f'{SHEET_NAME}!A1:F60'
+    ).execute().get('values', [])
+    for i, row in enumerate(rows[1:], 2):
+        if len(row) >= 2 and row[1].strip() == name:
+            col_letter = 'ABCDEF'[col_idx]
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f'{SHEET_NAME}!{col_letter}{i}',
+                valueInputOption='RAW',
+                body={'values': [[value]]}
+            ).execute()
+            format_sheet()
+            return True
+    return False
+
 def add_from_csv(csv_path: str):
     """
     מוסיף משתתפים מ-CSV של Compete (פורמט: שם משפחה שם פרטי).
