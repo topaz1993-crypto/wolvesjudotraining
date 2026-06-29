@@ -1052,70 +1052,21 @@ def cancel_attendance(session: dict):
                 body={"requests": requests}
             ).execute()
 
-
-def deactivate_student(branch: str, student_name: str) -> str:
-    """
-    סמן ספורטאי כלא פעיל בגיליון הנוכחות של הסניף.
-    מוסיף ❌ לפני השם בכל הקבוצות שהספורטאי מופיע בהן.
-    """
-    spreadsheet_id = BRANCH_SHEETS.get(branch)
-    if not spreadsheet_id:
-        return f"❌ סניף לא מוכר: {branch}"
-
-    service = _get_service()
-    groups = BRANCH_GROUPS.get(branch, [])
-    found = []
-
-    name_lower = student_name.strip().lower()
-
-    for group in groups:
-        try:
-            students = get_students(service, spreadsheet_id, group)
-        except Exception:
-            continue
-
-        # חפש גם ספורטאים לא פעילים כדי לא לכפול
+def _search_students_in_group(service, spreadsheet_id, group):
+    """קרא את כל שורות הספורטאים (כולל לא פעילים) מקבוצה."""
+    try:
         start_row = _detect_student_start_row(service, spreadsheet_id, group)
         result = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{group}!A{start_row}:C200"
         ).execute()
-        all_rows = result.get("values", [])
-
-        for i, row in enumerate(all_rows, start=start_row):
-            raw_name = ((row[1].strip() if len(row) > 1 else "") + " " +
-                        (row[2].strip() if len(row) > 2 else "")).strip()
-            # Skip already inactive
-            if raw_name.startswith("❌"):
-                clean = raw_name.lstrip("❌").strip()
-            else:
-                clean = raw_name
-
-            if not clean:
-                continue
-
-            if name_lower in clean.lower():
-                # Write ❌ to col B (the name column)
-                parts = clean.split(" ", 1)
-                new_b = "❌ " + (parts[0] if parts else clean)
-                new_c = parts[1] if len(parts) > 1 else (row[2].strip() if len(row) > 2 else "")
-                service.spreadsheets().values().update(
-                    spreadsheetId=spreadsheet_id,
-                    range=f"{group}!B{i}:C{i}",
-                    valueInputOption="RAW",
-                    body={"values": [[new_b, new_c]]}
-                ).execute()
-                found.append(f"{group}: {clean}")
-
-    if found:
-        return f"✅ סומן כלא פעיל:\n" + "\n".join(f"  • {f}" for f in found)
-    return f"⚠️ לא נמצא '{student_name}' בסניף {branch}"
+        return start_row, result.get("values", [])
+    except Exception:
+        return None, []
 
 
-def activate_student(branch: str, student_name: str) -> str:
-    """
-    החזר ספורטאי לפעיל — מסיר ❌ מהשם בגיליון.
-    """
+def deactivate_student(branch: str, student_name: str) -> str:
+    """סמן ספורטאי כלא פעיל — מוסיף ❌ לתחילת עמודה B."""
     spreadsheet_id = BRANCH_SHEETS.get(branch)
     if not spreadsheet_id:
         return f"❌ סניף לא מוכר: {branch}"
@@ -1126,32 +1077,62 @@ def activate_student(branch: str, student_name: str) -> str:
     name_lower = student_name.strip().lower()
 
     for group in groups:
-        try:
-            start_row = _detect_student_start_row(service, spreadsheet_id, group)
-            result = service.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=f"{group}!A{start_row}:C200"
-            ).execute()
-            all_rows = result.get("values", [])
-        except Exception:
+        start_row, all_rows = _search_students_in_group(service, spreadsheet_id, group)
+        if start_row is None:
             continue
 
         for i, row in enumerate(all_rows, start=start_row):
-            raw_b = (row[1].strip() if len(row) > 1 else "")
-            raw_c = (row[2].strip() if len(row) > 2 else "")
-            if not raw_b.startswith("❌"):
-                continue
-            clean_b = raw_b.lstrip("❌").strip()
-            full_name = (clean_b + " " + raw_c).strip()
+            b = row[1].strip() if len(row) > 1 else ""
+            c = row[2].strip() if len(row) > 2 else ""
+            if b.startswith("❌"):
+                continue  # כבר לא פעיל
+            full_name = (b + " " + c).strip()
             if name_lower in full_name.lower():
                 service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id,
-                    range=f"{group}!B{i}:C{i}",
+                    range=f"{group}!B{i}",
                     valueInputOption="RAW",
-                    body={"values": [[clean_b, raw_c]]}
+                    body={"values": [["❌ " + b]]}
                 ).execute()
                 found.append(f"{group}: {full_name}")
 
     if found:
-        return f"✅ הוחזר לפעיל:\n" + "\n".join(f"  • {f}" for f in found)
+        return "✅ סומן כלא פעיל:\n" + "\n".join(f"  • {f}" for f in found)
+    return f"⚠️ לא נמצא '{student_name}' בסניף {branch}"
+
+
+def activate_student(branch: str, student_name: str) -> str:
+    """החזר ספורטאי לפעיל — מסיר ❌ מעמודה B."""
+    spreadsheet_id = BRANCH_SHEETS.get(branch)
+    if not spreadsheet_id:
+        return f"❌ סניף לא מוכר: {branch}"
+
+    service = _get_service()
+    groups = BRANCH_GROUPS.get(branch, [])
+    found = []
+    name_lower = student_name.strip().lower()
+
+    for group in groups:
+        start_row, all_rows = _search_students_in_group(service, spreadsheet_id, group)
+        if start_row is None:
+            continue
+
+        for i, row in enumerate(all_rows, start=start_row):
+            b = row[1].strip() if len(row) > 1 else ""
+            c = row[2].strip() if len(row) > 2 else ""
+            if not b.startswith("❌"):
+                continue
+            clean_b = b[1:].strip()  # הסר ❌ ורווח
+            full_name = (clean_b + " " + c).strip()
+            if name_lower in full_name.lower():
+                service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"{group}!B{i}",
+                    valueInputOption="RAW",
+                    body={"values": [[clean_b]]}
+                ).execute()
+                found.append(f"{group}: {full_name}")
+
+    if found:
+        return "✅ הוחזר לפעיל:\n" + "\n".join(f"  • {f}" for f in found)
     return f"⚠️ לא נמצא '{student_name}' מסומן כלא פעיל בסניף {branch}"
