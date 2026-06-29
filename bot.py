@@ -5379,6 +5379,65 @@ async def cmd_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ שגיאה: {e}")
 
 
+
+async def cmd_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/registrations [שם אירוע] — רשימת נרשמים ומשלמים לאירוע מהמיילים."""
+    if not context.args:
+        await update.message.reply_text(
+            "🎫 *הרשמות לאירוע*\n\n"
+            "שימוש: `/registrations [שם]`\n"
+            "דוגמאות:\n"
+            "  `/registrations לילה יפני`\n"
+            "  `/registrations מחנה קיץ`\n"
+            "  `/registrations מחנה אימונים`",
+            parse_mode="Markdown"
+        )
+        return
+
+    keyword = " ".join(context.args)
+    msg = await update.message.reply_text(f"🔍 מחפש הרשמות עבור: *{keyword}*...", parse_mode="Markdown")
+    await update.message.chat.send_action("typing")
+
+    try:
+        import email_reader as er
+        registrations = er.search_event_registrations(keyword)
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה: {e}")
+        return
+
+    if not registrations:
+        await msg.edit_text(
+            f"⚠️ לא נמצאו הרשמות עבור: *{keyword}*\n"
+            f"ודא שמילת החיפוש תואמת לשם האירוע במייל.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Group by event name
+    by_event = {}
+    for r in registrations:
+        by_event.setdefault(r["event_name"], []).append(r)
+
+    lines = [f"🎫 *הרשמות: {keyword}*\n"]
+    total_amount = 0
+
+    for event_name, participants in by_event.items():
+        lines.append(f"📋 *{event_name}* ({len(participants)} משתתפים):")
+        for i, p in enumerate(participants, 1):
+            phone_str = f" — {p['phone']}" if p['phone'] else ""
+            price_str = f" ₪{p['price']}" if p['price'] else ""
+            lines.append(f"  {i}. {p['name']}{phone_str}{price_str}")
+            try:
+                total_amount += float(p['price'].replace(',','')) if p['price'] else 0
+            except Exception:
+                pass
+        lines.append("")
+
+    if total_amount:
+        lines.append(f"💰 *סה״כ שולם: ₪{total_amount:,.0f}*")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
 async def cmd_week_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/week_plan [סניף] — כל תוכניות האימון של הסניף לשבוע הקרוב."""
     from datetime import date as _date, timedelta as _td
@@ -5500,6 +5559,7 @@ def main():
     app.add_handler(CommandHandler("activate", cmd_activate))
     app.add_handler(CommandHandler("message", cmd_message))
     app.add_handler(CommandHandler("week_plan", cmd_week_plan))
+    app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

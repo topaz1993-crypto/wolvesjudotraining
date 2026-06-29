@@ -115,3 +115,81 @@ def mark_seen(email_id: str):
 def mark_skipped(email_id: str):
     """Mark email as processed (skipped — not payment related)."""
     mark_seen(email_id)
+
+
+def search_event_registrations(event_keyword: str) -> list[dict]:
+    """
+    חיפוש הרשמות לאירוע לפי מילת מפתח (למשל "לילה יפני" או "מחנה").
+    מחזיר רשימת { name, phone, email, price, date, event_name }.
+    מחפש ב-invoice4u — מיילים מסוג "רכישת מוצר".
+    """
+    if not GMAIL_APP_PASS:
+        return []
+
+    import re
+    results = []
+    seen_names = set()
+
+    try:
+        imap = imaplib.IMAP4_SSL("imap.gmail.com")
+        imap.login(GMAIL_USER, GMAIL_APP_PASS)
+        imap.select("INBOX")
+
+        # חיפוש מיילים מ-invoice4u עם נושא "רכישת מוצר"
+        _, data = imap.search(None, '(FROM "notifications@invoice4u.co.il" SUBJECT "רכישת מוצר")')
+        msg_ids = data[0].split() if data[0] else []
+
+        keyword_lower = event_keyword.strip().lower()
+
+        for mid in msg_ids:
+            try:
+                _, msg_data = imap.fetch(mid, "(RFC822)")
+                raw = msg_data[0][1]
+                msg = email_lib.message_from_bytes(raw)
+                body = _get_body(msg)
+
+                # סינון לפי מילת מפתח
+                if keyword_lower not in body.lower():
+                    continue
+
+                # חילוץ שם האירוע
+                event_match = re.search(r'שם עמוד המכירה\s*:\s*(.+?)(?:\n|שם הלקוח)', body, re.DOTALL)
+                event_name = event_match.group(1).strip() if event_match else event_keyword
+
+                # חילוץ שם הלקוח
+                name_match = re.search(r'שם הלקוח\s*:\s*(.+?)(?:\n|מייל)', body, re.DOTALL)
+                name = name_match.group(1).strip() if name_match else ""
+
+                # חילוץ טלפון
+                phone_match = re.search(r'טלפון הלקוח.*?:\s*(\d[\d\-]+)', body)
+                phone = phone_match.group(1).strip() if phone_match else ""
+
+                # חילוץ מחיר
+                price_match = re.search(r'מחיר המוצר\s*:\s*([\d,.]+)', body)
+                price = price_match.group(1).strip() if price_match else ""
+
+                # חילוץ מייל
+                email_match = re.search(r'מייל הלקוח\s*:\s*(\S+)', body)
+                customer_email = email_match.group(1).strip() if email_match else ""
+
+                # מניעת כפילויות
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    date_str = msg.get("Date", "")
+                    results.append({
+                        "name": name,
+                        "phone": phone,
+                        "email": customer_email,
+                        "price": price,
+                        "date": date_str[:16],
+                        "event_name": event_name,
+                    })
+            except Exception:
+                continue
+
+        imap.logout()
+
+    except Exception:
+        pass
+
+    return sorted(results, key=lambda x: x["date"])
