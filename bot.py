@@ -4637,10 +4637,55 @@ def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
 
 
 
+
+
+async def on_startup(app):
+    """Notify Topaz when bot comes online."""
+    if TOPAZ_CHAT_ID:
+        from datetime import datetime as _dt
+        now = _dt.now().strftime("%d/%m/%Y %H:%M")
+        try:
+            await app.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text=f"✅ *הבוט עלה לאוויר* — {now}\n\nכל המערכות פעילות 🟢",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler — logs and notifies Topaz on every unhandled exception."""
+    import traceback
+    tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
+    log.error("Unhandled exception:\n%s", tb)
+    if TOPAZ_CHAT_ID:
+        short = str(context.error)[:300]
+        user_info = ""
+        if isinstance(update, Update) and update.effective_user:
+            user_info = f" (מ-{update.effective_user.first_name})"
+        try:
+            await context.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text=f"⚠️ *שגיאה בבוט{user_info}:*\n`{short}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+
 async def registration_sync_job(context):
-    """Background job — runs every hour. Checks for new event registrations via WhatsApp emails."""
+    """Background job — runs every hour. Checks for new event registrations + cleans stale sessions."""
     if not TOPAZ_CHAT_ID:
         return
+    # Clean stale in-memory sessions (prevent memory leak)
+    import time as _time
+    now_ts = _time.time()
+    for d in [sheets_sessions, pending_belt_events, calendar_sessions, payment_sync_sessions]:
+        stale = [k for k, v in d.items()
+                 if isinstance(v, dict) and now_ts - v.get("_ts", now_ts) > 3600]
+        for k in stale:
+            d.pop(k, None)
     try:
         report = registration_sync.run_sync_and_report()
         if report:
@@ -5846,6 +5891,12 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     # Background jobs
+    # Error handler
+    app.add_error_handler(error_handler)
+
+    # Startup notification
+    app.post_init = on_startup
+
     if TOPAZ_CHAT_ID and app.job_queue:
         app.job_queue.run_repeating(registration_sync_job,        interval=3600,  first=90)
         app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
