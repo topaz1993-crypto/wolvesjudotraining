@@ -4712,6 +4712,35 @@ def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
 
 
 
+
+async def wa_payment_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    כל ראשון בשבוע בשעה 09:00 — שולח לטופז סיכום חייבים עם כפתור שליחה.
+    """
+    from datetime import date
+    if not TOPAZ_CHAT_ID:
+        return
+    try:
+        month = date.today().strftime("%m/%Y")
+        unpaid = payments_report.get_unpaid(month)
+        if not unpaid:
+            return  # Everyone paid — no reminder needed
+
+        lines = [f"💰 *תזכורת שבועית — חייבים לחודש {month}*\n"]
+        for s in unpaid[:15]:
+            lines.append(f"• {s['name']} — {s.get('amount', '')}₪")
+        if len(unpaid) > 15:
+            lines.append(f"_...ועוד {len(unpaid)-15} נוספים_")
+
+        lines.append("\n📱 לשליחת תזכורות WhatsApp: /unpaid")
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text="\n".join(lines),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        log.error(f"wa_payment_reminder_job error: {e}")
+
 async def on_startup(app):
     """Notify Topaz when bot comes online."""
     if TOPAZ_CHAT_ID:
@@ -5858,6 +5887,46 @@ async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/help — רשימת כל הפקודות."""
+    text = """🥋 *Wolves Judo Bot — פקודות*
+
+📅 *יומן*
+/today /tomorrow /week /month
+
+👥 *ספורטאים*
+/student [שם] — כרטיס ספורטאי
+/update\_student [שם] [שדה]=[ערך]
+/dropout — נעדרים 3+ אימונים
+
+💰 *תשלומים*
+/unpaid [חודש] — חייבים
+/report — דו״ח כספי
+/payments — סריקת מיילים
+
+📊 *ניהול*
+/stats — סטטיסטיקות
+/camp — מחנה קיץ
+/lyla — לילה יפני
+/archive [שאילתה]
+
+📱 *WhatsApp*
+/wa\_connect — חיבור QR
+/wa\_status — מצב חיבור
+/wa\_groups — שליחה לקבוצה
+/message [שם] — הודעה להורה
+
+🔄 *לוג שיחות*
+/conv\_log — קישור ללוג
+/migrate\_history — ייצוא שיחות ישנות
+
+📌 *כללי*
+/add\_missing — הוסף ספורטאים חסרים
+/myid — Chat ID שלך
+"נוכחות [סניף]" — רישום נוכחות"""
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_groups — מציג קבוצות WhatsApp ומאפשר שליחה."""
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
@@ -6174,6 +6243,7 @@ def main():
     app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CommandHandler("add_missing", cmd_add_missing))
     app.add_handler(CommandHandler("conv_log", cmd_conv_log))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("wa_connect", cmd_wa_connect))
     app.add_handler(CommandHandler("wa_status", cmd_wa_status))
     app.add_handler(CommandHandler("wa_groups", cmd_wa_groups))
@@ -6192,6 +6262,13 @@ def main():
 
     if TOPAZ_CHAT_ID and app.job_queue:
         app.job_queue.run_repeating(registration_sync_job,        interval=3600,  first=90)
+        # Weekly payment reminder — every Monday 09:00
+        from datetime import time as _time
+        app.job_queue.run_daily(
+            wa_payment_reminder_job,
+            time=_time(9, 0),
+            days=(0,),  # Monday
+        )
         app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
         app.job_queue.run_repeating(monthly_report_job,           interval=86400, first=120)
         app.job_queue.run_repeating(dropout_monitor_job,          interval=86400, first=180)
