@@ -1090,7 +1090,7 @@ def deactivate_student(branch: str, student_name: str) -> str:
             if name_lower in full_name.lower():
                 service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id,
-                    range=f"{group}!B{i}",
+                    range=f"'{group}'!B{i}",
                     valueInputOption="RAW",
                     body={"values": [["❌ " + b]]}
                 ).execute()
@@ -1125,13 +1125,14 @@ def activate_student(branch: str, student_name: str) -> str:
             clean_b = b[1:].strip()  # הסר ❌ ורווח
             full_name = (clean_b + " " + c).strip()
             if name_lower in full_name.lower():
-                service.spreadsheets().values().update(
+                resp = service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id,
-                    range=f"{group}!B{i}",
+                    range=f"'{group}'!B{i}",
                     valueInputOption="RAW",
                     body={"values": [[clean_b]]}
                 ).execute()
-                found.append(f"{group}: {full_name}")
+                updated = resp.get("updatedCells", 0)
+                found.append(f"{group}: {full_name} (עודכנו {updated} תאים)")
 
     if found:
         return "✅ הוחזר לפעיל:\n" + "\n".join(f"  • {f}" for f in found)
