@@ -5188,6 +5188,46 @@ async def handle_inv4u_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return True
 
 
+
+async def cmd_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/delete_plan [סניף] [תאריך] — מחיקת תוכנית מהגיליון."""
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ שימוש: /delete_plan [סניף] [תאריך]\n"
+            "לדוגמה: /delete_plan נבחרת 3/7/2026"
+        )
+        return
+    branch = context.args[0]
+    date_str = context.args[1]
+    if branch not in tp.BRANCH_TABS:
+        await update.message.reply_text(
+            f"❌ סניף לא מוכר: {branch}\n"
+            f"סניפים: {', '.join(tp.BRANCH_TABS.keys())}"
+        )
+        return
+    import re as _re
+    from datetime import date as _date
+    m = _re.match(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", date_str)
+    if not m:
+        await update.message.reply_text(f"❌ תאריך לא תקין: {date_str}\nפורמט: יום/חודש או יום/חודש/שנה")
+        return
+    day, month = int(m.group(1)), int(m.group(2))
+    year = int(m.group(3)) if m.group(3) else _date.today().year
+    if year < 100:
+        year += 2000
+    try:
+        plan_date = _date(year, month, day)
+    except ValueError:
+        await update.message.reply_text(f"❌ תאריך לא חוקי: {date_str}")
+        return
+    msg = await update.message.reply_text(f"🗑️ מוחק תוכנית {branch} {day}/{month}...")
+    try:
+        result = tp.clear_plan_from_sheet(branch, plan_date)
+        await msg.edit_text(result)
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה: {e}")
+
+
 def main():
     # Clear undo file on startup — prevents stale undo buttons from prior run
     att.clear_dropout_undo()
@@ -5218,6 +5258,7 @@ def main():
     app.add_handler(CommandHandler("dropout", cmd_dropout))
     app.add_handler(CommandHandler("contacts", contacts_command))
     app.add_handler(CommandHandler("edit", cmd_edit))
+    app.add_handler(CommandHandler("delete_plan", cmd_delete_plan))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

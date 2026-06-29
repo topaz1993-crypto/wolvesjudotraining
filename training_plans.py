@@ -909,6 +909,50 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     return "\n".join(results)
 
 
+def clear_plan_from_sheet(branch: str, plan_date) -> str:
+    """
+    Clear all training plan content for a given branch+date from the sheet.
+    Writes empty strings to all group/content cells in that date column.
+    Returns a summary string.
+    """
+    tab_name = BRANCH_TABS.get(branch)
+    if not tab_name:
+        raise ValueError(f"סניף לא מוכר: {branch}")
+
+    service = _get_service()
+    sheet_id = _get_sheet_id(service, tab_name)
+    # Check if date column exists (don't create it)
+    rows_check = _read_tab(service, tab_name)
+    date_str = f"{plan_date.day}/{plan_date.month}"
+    header = rows_check[0] if rows_check else []
+    col_0 = next((i for i, c in enumerate(header) if c.strip() == date_str), None)
+    if col_0 is None:
+        return f"⚠️ לא נמצא תאריך {plan_date.day}/{plan_date.month} בגיליון {tab_name}"
+    col_letter = _col_letter(col_0)
+
+    rows = _read_tab(service, tab_name)
+    # Find all content rows (skip header row 0)
+    updates = []
+    for i, row in enumerate(rows):
+        if i == 0:
+            continue
+        # Skip rows that are group-name rows (col A or B has group name, col date empty is fine)
+        if col_0 < len(row) and row[col_0]:
+            updates.append({
+                "range": f"'{tab_name}'!{col_letter}{i+1}",
+                "values": [[""]]
+            })
+
+    if updates:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"valueInputOption": "RAW", "data": updates}
+        ).execute()
+        return f"✅ נמחקו {len(updates)} תאים בגיליון {tab_name} לתאריך {plan_date.day}/{plan_date.month}"
+    else:
+        return f"⚠️ לא נמצא תוכן לתאריך {plan_date.day}/{plan_date.month} בגיליון {tab_name}"
+
+
 def load_plan_from_sheet(branch: str, plan_date) -> dict:
     """
     Read the current training plan from the sheet for a given branch+date.
