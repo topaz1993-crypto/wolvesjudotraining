@@ -212,7 +212,7 @@ def get_students(service, spreadsheet_id: str, sheet_name: str) -> list[tuple[in
     for i, row in enumerate(rows, start=start_row):
         name = (row[1].strip() if len(row) > 1 else "") + " " + (row[2].strip() if len(row) > 2 else "")
         name = name.strip()
-        if name:
+        if name and not name.startswith("❌"):
             students.append((i, name))
     return students
 
@@ -1051,3 +1051,62 @@ def cancel_attendance(session: dict):
                 spreadsheetId=spreadsheet_id,
                 body={"requests": requests}
             ).execute()
+
+
+def deactivate_student(branch: str, student_name: str) -> str:
+    """
+    סמן ספורטאי כלא פעיל בגיליון הנוכחות של הסניף.
+    מוסיף ❌ לפני השם בכל הקבוצות שהספורטאי מופיע בהן.
+    """
+    spreadsheet_id = BRANCH_SHEETS.get(branch)
+    if not spreadsheet_id:
+        return f"❌ סניף לא מוכר: {branch}"
+
+    service = _get_service()
+    groups = BRANCH_GROUPS.get(branch, [])
+    found = []
+
+    name_lower = student_name.strip().lower()
+
+    for group in groups:
+        try:
+            students = get_students(service, spreadsheet_id, group)
+        except Exception:
+            continue
+
+        # חפש גם ספורטאים לא פעילים כדי לא לכפול
+        start_row = _detect_student_start_row(service, spreadsheet_id, group)
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{group}!A{start_row}:C200"
+        ).execute()
+        all_rows = result.get("values", [])
+
+        for i, row in enumerate(all_rows, start=start_row):
+            raw_name = ((row[1].strip() if len(row) > 1 else "") + " " +
+                        (row[2].strip() if len(row) > 2 else "")).strip()
+            # Skip already inactive
+            if raw_name.startswith("❌"):
+                clean = raw_name.lstrip("❌").strip()
+            else:
+                clean = raw_name
+
+            if not clean:
+                continue
+
+            if name_lower in clean.lower():
+                # Write ❌ to col B (the name column)
+                parts = clean.split(" ", 1)
+                new_b = "❌ " + (parts[0] if parts else clean)
+                new_c = parts[1] if len(parts) > 1 else (row[2].strip() if len(row) > 2 else "")
+                service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"{group}!B{i}:C{i}",
+                    valueInputOption="RAW",
+                    body={"values": [[new_b, new_c]]}
+                ).execute()
+                found.append(f"{group}: {clean}")
+
+    if found:
+        return f"✅ סומן כלא פעיל:\n" + "\n".join(f"  • {f}" for f in found)
+    return f"⚠️ לא נמצא '{student_name}' בסניף {branch}"
