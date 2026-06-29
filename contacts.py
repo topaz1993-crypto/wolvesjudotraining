@@ -230,3 +230,63 @@ def stats() -> dict:
 def reload():
     """Force reload all contacts from CSV files."""
     _cache.clear()
+
+
+def _parse_contact_birthday(bd_str: str):
+    """Parse birthday string from Google Contacts CSV (format: YYYY-MM-DD or --MM-DD)."""
+    import re
+    if not bd_str:
+        return None
+    # Full date: 1984-01-03
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})', bd_str)
+    if m:
+        return int(m.group(2)), int(m.group(3))  # (month, day)
+    # No year: --01-03
+    m = re.match(r'--(\d{2})-(\d{2})', bd_str)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def birthdays_this_week() -> list[dict]:
+    """Return contacts whose birthday falls within the next 7 days."""
+    from datetime import date, timedelta
+    today = date.today()
+    days_ahead = [(today + timedelta(days=i)) for i in range(7)]
+    target_md = {(d.month, d.day) for d in days_ahead}
+
+    results = []
+    for branch, path in CONTACT_FILES.items():
+        if not path.exists():
+            continue
+        import csv as _csv
+        with open(path, encoding='utf-8') as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                bd = _parse_contact_birthday((row.get('Birthday') or '').strip())
+                if not bd:
+                    continue
+                if bd in target_md:
+                    first = (row.get('First Name') or '').strip()
+                    phone = _normalize_phone((row.get('Phone 1 - Value') or '').strip())
+                    # Remove branch name suffix from contact name
+                    for b in ["סירקין", "נווה ירק", "חגור", "אהרונוביץ", "אהרונוביץ'"]:
+                        first = first.replace(b, '').strip()
+                    bday_date = date(today.year, bd[0], bd[1])
+                    if bday_date < today:
+                        bday_date = date(today.year + 1, bd[0], bd[1])
+                    results.append({
+                        'name': first,
+                        'phone': phone,
+                        'branch': branch,
+                        'date': bday_date,
+                        'day_str': f"{bd[2] if len(bd) > 2 else bday_date.day}/{bd[0]}",
+                    })
+    results.sort(key=lambda x: x['date'])
+    return results
+
+
+def get_parent_for_student(athlete_name: str, branch: str = None) -> dict:
+    """Return best parent match for athlete, or empty dict."""
+    parents = find_parent(athlete_name, branch)
+    return parents[0] if parents else {}

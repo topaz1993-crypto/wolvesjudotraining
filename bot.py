@@ -4733,6 +4733,34 @@ async def daily_training_reminder_job(context):
     except Exception:
         pass
 
+    # ── ימי הולדת השבוע ──
+    try:
+        bdays = contacts_db.birthdays_this_week()
+        if bdays:
+            lines.append("\n🎂 *ימי הולדת השבוע:*")
+            for b in bdays:
+                lines.append(f"  🎉 {b['name']} — {b['date'].day}/{b['date'].month}")
+    except Exception as e:
+        log.warning("birthday fetch error: %s", e)
+
+    # ── חייבי תשלום החודש ──
+    try:
+        from datetime import date as _date2
+        import payments_report as _pr
+        he_months = ["","ינואר","פברואר","מרץ","אפריל","מאי","יוני",
+                     "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"]
+        cur_month = he_months[_date2.today().month]
+        unpaid_map = _pr.get_unpaid(cur_month)
+        unpaid = (unpaid_map or {}).get(cur_month, [])
+        if unpaid:
+            lines.append(f"\n💰 *לא שילמו {cur_month} ({len(unpaid)} ספורטאים):*")
+            for s in unpaid[:5]:
+                lines.append(f"  • {s['full_name']} ({s.get('club','')})")
+            if len(unpaid) > 5:
+                lines.append(f"  _...ועוד {len(unpaid)-5}_")
+    except Exception as e:
+        log.warning("unpaid fetch error: %s", e)
+
     # שלח רק אם יש תוכן מעבר לכותרת
     if len(lines) <= 2:
         return
@@ -4810,27 +4838,47 @@ async def weekly_summary_job(context):
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def cmd_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/student <שם> — כרטיס ספורטאי מלא כולל נוכחות אחרונה."""
+    """/student <שם> — כרטיס ספורטאי מלא: חגורה, תשלומים, הורה + טלפון."""
     if not context.args:
-        await update.message.reply_text("שלח: `/student שם`", parse_mode="Markdown")
+        await update.message.reply_text("שלח: `/student שם`\nדוגמה: `/student נועם`", parse_mode="Markdown")
         return
     await update.message.chat.send_action("typing")
     name = " ".join(context.args)
-    s = payments_report.student_card(name)
-    if not s:
+
+    # --- חיפוש חלקי: כל הספורטאים שמכילים את שם החיפוש ---
+    all_students = payments_report.load_all_students()
+    name_lower = name.strip().lower()
+    matches = [s for s in all_students if name_lower in s.get("full_name", "").lower()]
+
+    if not matches:
+        # נסה fuzzy
+        s = payments_report.student_card(name)
+        matches = [s] if s else []
+
+    if not matches:
         await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*", parse_mode="Markdown")
         return
 
-    # Base card (payments)
+    if len(matches) > 1:
+        names_list = "\n".join(f"  • {s['full_name']} ({s.get('club','')})" for s in matches[:10])
+        await update.message.reply_text(
+            f"🔍 נמצאו {len(matches)} ספורטאים:\n{names_list}\n\nשלח שם מלא לכרטיס מפורט.",
+            parse_mode="Markdown"
+        )
+        return
+
+    s = matches[0]
     card = payments_report.format_student_card(s)
 
-    # Recent attendance from archive (last 5 sessions for this student's group/branch)
+    # --- הורה + טלפון ---
     try:
-        group_records = arc.recent(branch=s.get("club"), n=5)
-        if group_records:
-            card += "\n\n📅 *5 אימונים אחרונים בסניף:*"
-            for r in group_records:
-                card += f"\n  {r['date']} — {r['group']}"
+        parent = contacts_db.get_parent_for_student(s["full_name"], s.get("club"))
+        if parent:
+            card += f"\n\n👨‍👩‍👧 *הורה:* {parent.get('parent_name', '—')}"
+            card += f"\n📱 *טלפון:* {parent.get('phone', '—')}"
+            wa_link = f"https://wa.me/972{parent['phone'].lstrip('0')}" if parent.get('phone') else ""
+            if wa_link:
+                card += f"\n[📲 שלח WhatsApp]({wa_link})"
     except Exception:
         pass
 
@@ -5191,6 +5239,99 @@ async def handle_inv4u_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
+
+async def cmd_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/message [שם] [סוג] — הודעת WhatsApp מוכנה להורה.
+    סוגים: חיסור | תשלום | חגורה | כללי (ברירת מחדל: כללי)
+    דוגמה: /message נועם כהן תשלום
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "📲 *שליחת הודעה להורה*\n\n"
+            "שימוש: `/message [שם] [סוג]`\n"
+            "סוגים: חיסור | תשלום | חגורה | כללי\n\n"
+            "דוגמה: `/message נועם כהן תשלום`",
+            parse_mode="Markdown"
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+
+    # זיהוי סוג ההודעה (המילה האחרונה אם היא סוג ידוע)
+    MSG_TYPES = {"חיסור", "תשלום", "חגורה", "כללי"}
+    args = list(context.args)
+    msg_type = "כללי"
+    if args and args[-1] in MSG_TYPES:
+        msg_type = args.pop()
+    name = " ".join(args).strip()
+
+    if not name:
+        await update.message.reply_text("❌ יש לציין שם ספורטאי")
+        return
+
+    # חיפוש הורה
+    parent = contacts_db.get_parent_for_student(name)
+    if not parent:
+        # נסה עם חיפוש חלקי
+        all_students = payments_report.load_all_students()
+        name_lower = name.lower()
+        match = next((s for s in all_students if name_lower in s.get("full_name","").lower()), None)
+        if match:
+            parent = contacts_db.get_parent_for_student(match["full_name"], match.get("club"))
+            name = match["full_name"]
+
+    if not parent:
+        await update.message.reply_text(f"⚠️ לא מצאתי הורה עבור *{name}*\nבדוק שהשם תואם לגיליון.", parse_mode="Markdown")
+        return
+
+    parent_name = parent.get("parent_name", "הורה")
+    phone = parent.get("phone", "")
+    first_name = name.split()[0] if name else name
+
+    # בניית ההודעה לפי סוג
+    if msg_type == "חיסור":
+        msg = (
+            f"שלום {parent_name},\n"
+            f"שמתי לב ש{first_name} לא הגיע/ה לאימון האחרון.\n"
+            f"הכל בסדר? אנחנו כאן אם יש משהו.\n"
+            f"נשמח לראות אותו/ה בפעם הבאה 🥋"
+        )
+    elif msg_type == "תשלום":
+        msg = (
+            f"שלום {parent_name},\n"
+            f"נשמח אם תוכל/י לסדר את תשלום דמי החבר עבור {first_name}.\n"
+            f"ניתן לשלם דרך הקישור או בהעברה בנקאית.\n"
+            f"תודה רבה 🙏"
+        )
+    elif msg_type == "חגורה":
+        msg = (
+            f"שלום {parent_name},\n"
+            f"שמחים לבשר ש{first_name} עבר/ה בהצלחה מבחן חגורה! 🎉\n"
+            f"כל הכבוד על ההתמדה והעבודה הקשה.\n"
+            f"נמשיך לעבוד יחד 💪"
+        )
+    else:  # כללי
+        msg = (
+            f"שלום {parent_name},\n"
+            f"כאן טופז ממועדון Wolves Judo.\n"
+            f"רציתי ליצור קשר בנוגע ל{first_name}.\n"
+            f"אשמח אם תחזור/י אלי בהזדמנות, תודה!"
+        )
+
+    wa_number = "972" + phone.lstrip("0") if phone else ""
+    import urllib.parse
+    wa_url = f"https://wa.me/{wa_number}?text={urllib.parse.quote(msg)}" if wa_number else ""
+
+    reply = (
+        f"📲 *הודעה ל{parent_name}* ({phone})\n"
+        f"ספורטאי: *{name}*\n\n"
+        f"```\n{msg}\n```\n\n"
+    )
+    if wa_url:
+        reply += f"[🟢 פתח ב-WhatsApp]({wa_url})"
+
+    await update.message.reply_text(reply, parse_mode="Markdown", disable_web_page_preview=True)
+
 async def cmd_activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/activate [סניף] [שם] — החזרת ספורטאי לפעיל."""
     if not context.args or len(context.args) < 2:
@@ -5236,6 +5377,54 @@ async def cmd_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(result)
     except Exception as e:
         await msg.edit_text(f"❌ שגיאה: {e}")
+
+
+async def cmd_week_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/week_plan [סניף] — כל תוכניות האימון של הסניף לשבוע הקרוב."""
+    from datetime import date as _date, timedelta as _td
+
+    if not context.args:
+        branches = ", ".join(tp.BRANCH_TABS.keys())
+        await update.message.reply_text(
+            f"📅 שימוש: `/week_plan [סניף]`\nסניפים: {branches}",
+            parse_mode="Markdown"
+        )
+        return
+
+    branch = context.args[0]
+    if branch not in tp.BRANCH_TABS:
+        await update.message.reply_text(
+            f"❌ סניף לא מוכר: {branch}\nסניפים: {', '.join(tp.BRANCH_TABS.keys())}"
+        )
+        return
+
+    await update.message.chat.send_action("typing")
+    today = _date.today()
+    lines = [f"📅 *תוכניות אימון — {branch} — שבוע {today.day}/{today.month}*\n"]
+
+    found_any = False
+    for i in range(7):
+        d = today + _td(days=i)
+        try:
+            plan = tp.load_plan_from_sheet(branch, d)
+        except Exception:
+            continue
+        if not plan:
+            continue
+        found_any = True
+        day_names = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"]
+        day_name = day_names[d.weekday()]
+        lines.append(f"📆 *{day_name} {d.day}/{d.month}:*")
+        for group, items in plan.items():
+            lines.append(f"  🥋 *{group}*")
+            for row_type, val in items.items():
+                lines.append(f"    • {row_type}: {val[:60]}{'...' if len(val)>60 else ''}")
+        lines.append("")
+
+    if not found_any:
+        lines.append("⚠️ לא נמצאו תוכניות לשבוע הקרוב.")
+
+    await send_long(update, "\n".join(lines), parse_mode="Markdown")
 
 async def cmd_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/delete_plan [סניף] [תאריך] — מחיקת תוכנית מהגיליון."""
@@ -5309,6 +5498,8 @@ def main():
     app.add_handler(CommandHandler("delete_plan", cmd_delete_plan))
     app.add_handler(CommandHandler("deactivate", cmd_deactivate))
     app.add_handler(CommandHandler("activate", cmd_activate))
+    app.add_handler(CommandHandler("message", cmd_message))
+    app.add_handler(CommandHandler("week_plan", cmd_week_plan))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
