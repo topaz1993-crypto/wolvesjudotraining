@@ -5895,10 +5895,19 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ WhatsApp כבר מחובר!")
         return
 
+    status = wa_client.get_status()
     msg = await update.message.reply_text("⏳ מפעיל שירות WhatsApp — זה לוקח עד 2 דקות בפעם הראשונה...")
-    # Start service on-demand (not at bot startup)
+
     import threading
-    threading.Thread(target=wa_client.start_service, daemon=True).start()
+    if status.get("status") in ("logged_out", "auth_failed"):
+        # Session was logged out — force reconnect with fresh QR
+        wa_client.force_reconnect()
+    elif not wa_client._process_alive():
+        # Service not running — start it
+        threading.Thread(target=wa_client.start_service, daemon=True).start()
+    else:
+        # Service running but not connected — force reconnect
+        wa_client.force_reconnect()
 
     # Poll for QR up to 120 seconds, with status updates
     for i in range(120):

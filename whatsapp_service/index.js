@@ -108,6 +108,27 @@ app.get("/qr", (req, res) => {
   res.json({ qr: qrBase64 });
 });
 
+app.post("/reconnect", async (req, res) => {
+  console.log("[WA] Force reconnect requested — clearing session");
+  isConnected = false;
+  statusMsg   = "reconnecting";
+  qrBase64    = null;
+  // Clear auth files so a fresh QR is generated
+  try {
+    const { rmSync } = await import("fs");
+    rmSync(AUTH_DIR, { recursive: true, force: true });
+    mkdirSync(AUTH_DIR, { recursive: true });
+  } catch (e) {
+    console.warn("[WA] Could not clear auth dir:", e.message);
+  }
+  if (sock) {
+    try { sock.end(); } catch(_) {}
+    sock = null;
+  }
+  res.json({ ok: true });
+  setTimeout(() => connectToWhatsApp().catch(console.error), 1000);
+});
+
 app.get("/groups", async (req, res) => {
   if (!isConnected) return res.status(503).json({ error: "Not connected" });
   try {

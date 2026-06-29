@@ -129,6 +129,19 @@ def get_qr_base64() -> str | None:
     return None
 
 
+def force_reconnect() -> bool:
+    """מאפס את הסשן ומייצר QR חדש."""
+    httpx = _get_http()
+    if not httpx:
+        return False
+    try:
+        r = httpx.post(f"{BASE_URL}/reconnect", headers=HEADERS, timeout=10)
+        return r.json().get("ok", False)
+    except Exception as e:
+        log.error("force_reconnect error: %s", e)
+        return False
+
+
 def get_groups() -> list[dict]:
     """מחזיר רשימת קבוצות WhatsApp: [{id, name, size}]"""
     httpx = _get_http()
