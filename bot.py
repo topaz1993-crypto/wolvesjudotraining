@@ -5832,27 +5832,47 @@ async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_connect — מחבר WhatsApp דרך QR."""
+    import io, asyncio
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
         return
-    status = wa_client.get_status()
-    if status.get("connected"):
+    if wa_client.is_connected():
         await update.message.reply_text("✅ WhatsApp כבר מחובר!")
         return
-    await update.message.reply_text("⏳ מייצר QR — רגע...")
-    # Wait up to 15s for QR
-    for _ in range(15):
+
+    msg = await update.message.reply_text("⏳ מפעיל שירות WhatsApp — זה לוקח עד 2 דקות בפעם הראשונה...")
+
+    # Poll for QR up to 120 seconds, with status updates
+    for i in range(120):
         qr = wa_client.get_qr_base64()
         if qr:
-            import io, base64
-            img_bytes = base64.b64decode(qr)
-            await update.message.reply_photo(
-                photo=io.BytesIO(img_bytes),
-                caption="📱 סרוק את ה-QR הזה מהווטסאפ שלך (⋮ → מכשירים מקושרים → קשר מכשיר)"
-            )
+            try:
+                img_bytes = base64.b64decode(qr)
+                await msg.delete()
+                await update.message.reply_photo(
+                    photo=io.BytesIO(img_bytes),
+                    caption="📱 סרוק את ה-QR מהווטסאפ שלך:\n⋮ → *מכשירים מקושרים* → *קשר מכשיר*\n\nה-QR תקף ל-60 שניות",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                await update.message.reply_text(f"❌ שגיאה בשליחת QR: {e}")
             return
-        import asyncio
+
+        if wa_client.is_connected():
+            await msg.edit_text("✅ WhatsApp מחובר!")
+            return
+
+        # Status update every 30s
+        if i == 30:
+            await msg.edit_text("⏳ עדיין מאתחל — רגע...")
+        elif i == 60:
+            await msg.edit_text("⏳ Chromium לוקח זמן — עוד קצת...")
+        elif i == 90:
+            st = wa_client.get_status()
+            await msg.edit_text(f"⏳ מצב: `{st.get('status', '?')}` — ממשיך לחכות...", parse_mode="Markdown")
+
         await asyncio.sleep(1)
-    await update.message.reply_text("❌ QR לא הגיע — נסה שוב עוד 10 שניות")
+
+    await msg.edit_text("❌ לא הגיע QR תוך 2 דקות\n\nנסה:\n1. /wa_connect שוב\n2. בדוק שהבוט עלה תקין ב-Render")
 
 
 async def cmd_wa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
