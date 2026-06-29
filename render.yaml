@@ -1,8 +1,0 @@
-services:
-  - type: worker
-    name: wolvesjudotraining
-    runtime: docker
-    disk:
-      name: bot-data
-      mountPath: /data
-      sizeGB: 1
