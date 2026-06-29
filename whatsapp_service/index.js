@@ -108,18 +108,40 @@ app.get("/qr", (req, res) => {
   res.json({ qr: qrBase64 });
 });
 
+app.get("/groups", async (req, res) => {
+  if (!isConnected) return res.status(503).json({ error: "Not connected" });
+  try {
+    const chats = await sock.groupFetchAllParticipating();
+    const groups = Object.values(chats).map(g => ({
+      id:   g.id,
+      name: g.subject,
+      size: g.participants?.length || 0
+    }));
+    groups.sort((a, b) => a.name.localeCompare(b.name, "he"));
+    res.json({ groups });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/send", async (req, res) => {
   const { to, message } = req.body;
   if (!to || !message)  return res.status(400).json({ error: "Missing to/message" });
   if (!isConnected)     return res.status(503).json({ error: "Not connected" });
 
   try {
-    let number = to.replace(/\D/g, "");
-    if (number.startsWith("0")) number = "972" + number.slice(1);
-    const jid = number + "@s.whatsapp.net";
+    let jid;
+    if (to.endsWith("@g.us")) {
+      // Group JID — use as-is
+      jid = to;
+    } else {
+      let number = to.replace(/\D/g, "");
+      if (number.startsWith("0")) number = "972" + number.slice(1);
+      jid = number + "@s.whatsapp.net";
+    }
     await sock.sendMessage(jid, { text: message });
-    console.log(`[WA] Sent to ${number}`);
-    res.json({ success: true, to: number });
+    console.log(`[WA] Sent to ${jid}`);
+    res.json({ success: true, to: jid });
   } catch (e) {
     console.error("[WA] Send error:", e);
     res.status(500).json({ error: e.message });

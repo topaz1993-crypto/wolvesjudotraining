@@ -706,6 +706,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif extra_context:
         full_content = f"{user_text}\n\n[הקשר אוטומטי]\n{extra_context}"
 
+    # Check if user is typing a message for a WhatsApp group
+    pending_group = context.bot_data.get("wa_pending_group")
+    if pending_group:
+        del context.bot_data["wa_pending_group"]
+        await wa_send_with_approval(
+            context,
+            chat_id=str(update.effective_chat.id),
+            phone=pending_group["id"],  # group JID
+            recipient_name=f"קבוצה: {pending_group['name']}",
+            message=user_text
+        )
+        return
+
     await update.message.chat.send_action("typing")
 
     try:
@@ -2219,6 +2232,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action.startswith("wa_edit|"):
         await query.answer("✏️ שלח את הטקסט המעודכן")
+        return
+
+    if action.startswith("wa_group_pick|"):
+        await query.answer()
+        group_id = action.split("|", 1)[1]
+        groups = context.bot_data.get("wa_groups", {})
+        group = groups.get(group_id, {})
+        group_name = group.get("name", group_id)
+        # Store selected group, wait for user to type message
+        context.bot_data["wa_pending_group"] = {"id": group_id, "name": group_name}
+        await query.edit_message_text(
+            f"✅ בחרת: *{group_name}*\n\nעכשיו שלח את ההודעה שתרצה לשלוח לקבוצה:",
+            parse_mode="Markdown"
+        )
         return
 
 
@@ -5831,6 +5858,34 @@ async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/wa_groups — מציג קבוצות WhatsApp ומאפשר שליחה."""
+    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
+        return
+    if not wa_client.is_connected():
+        await update.message.reply_text("❌ WhatsApp לא מחובר — שלח /wa_connect")
+        return
+
+    groups = wa_client.get_groups()
+    if not groups:
+        await update.message.reply_text("❌ לא נמצאו קבוצות או שגיאה בחיבור")
+        return
+
+    # Store groups in context for later use
+    context.bot_data["wa_groups"] = {g["id"]: g for g in groups}
+
+    buttons = []
+    for g in groups[:20]:  # max 20 groups
+        label = f"{g['name']} ({g['size']} משתתפים)"[:50]
+        buttons.append([InlineKeyboardButton(label, callback_data=f"wa_group_pick|{g['id']}")])
+
+    await update.message.reply_text(
+        f"📱 *{len(groups)} קבוצות WhatsApp:*\nבחר קבוצה לשליחה:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
 async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_connect — מחבר WhatsApp דרך QR."""
     import io, asyncio, base64
@@ -6112,6 +6167,7 @@ def main():
     app.add_handler(CommandHandler("conv_log", cmd_conv_log))
     app.add_handler(CommandHandler("wa_connect", cmd_wa_connect))
     app.add_handler(CommandHandler("wa_status", cmd_wa_status))
+    app.add_handler(CommandHandler("wa_groups", cmd_wa_groups))
     app.add_handler(CommandHandler("migrate_history", cmd_migrate_history))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))

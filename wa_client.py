@@ -129,6 +129,19 @@ def get_qr_base64() -> str | None:
     return None
 
 
+def get_groups() -> list[dict]:
+    """מחזיר רשימת קבוצות WhatsApp: [{id, name, size}]"""
+    httpx = _get_http()
+    if not httpx:
+        return []
+    try:
+        r = httpx.get(f"{BASE_URL}/groups", headers=HEADERS, timeout=10)
+        return r.json().get("groups", [])
+    except Exception as e:
+        log.error("wa get_groups error: %s", e)
+        return []
+
+
 def send_message(phone: str, message: str) -> bool:
     httpx = _get_http()
     if not httpx:
