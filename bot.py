@@ -170,10 +170,10 @@ def calendar_buttons() -> InlineKeyboardMarkup:
 
 
 PLAN_GROUPS = {
-    "סירקין":     ["ד-ו", "ג", "א-ב", "גנים - חמישי", "ז- בוגרים"],
+    "סירקין":     ["ד-ו", "ג", "א-ב", "גן חובה", "ז- בוגרים"],
     "חגור":       ["ד-ח", "א-ג", "גנים"],
     "נווה ירק":   ["גנים", "ג-ו", "א-ב"],
-    "אהרונוביץ":  ["א-ו"],
+    "אהרונוביץ":  ["א-ה"],
     "איפון פייט": ["ב-ד", "ה-ז"],
     "פונקציונלי": ["ז-ח", 'ט-י"ב'],
     "נבחרת":      ["נבחרת"],
@@ -1455,7 +1455,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "סירקין":    [("ד-ו","bw_group|ד-ו"), ("ג","bw_group|ג"), ("א-ב","bw_group|א-ב"),
                           ("גנים","bw_group|גנים"), ("ז-בוגרים","bw_group|ז-בוגרים"), ("נבחרת","bw_group|נבחרת")],
             "חגור":      [("ד-ח","bw_group|ד-ח"), ("א-ג","bw_group|א-ג"), ("גנים","bw_group|גנים")],
-            "נווה ירק":  [("גנים","bw_group|גנים"), ("ג-ז","bw_group|ג-ז"), ("א-ב","bw_group|א-ב")],
+            "נווה ירק":  [("גנים","bw_group|גנים"), ("ג-ו","bw_group|ג-ו"), ("א-ב","bw_group|א-ב")],
             "אהרונוביץ": [("א-ה","bw_group|א-ה")],
         }
         rows = []
@@ -1487,7 +1487,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ("חגור",   "א-ג"):        [("ראשון", "17:15")],
             ("חגור",   "גנים"):       [("ראשון", "18:00")],
             ("נווה ירק","גנים"):      [("שלישי", "16:45")],
-            ("נווה ירק","ג-ז"):       [("שלישי", "17:45")],
+            ("נווה ירק","ג-ו"):       [("שלישי", "17:45")],
             ("נווה ירק","א-ב"):       [("שלישי", "18:30")],
             ("אהרונוביץ","א-ה"):      [("רביעי", "14:50")],
         }
@@ -5336,7 +5336,8 @@ async def handle_inv4u_callback(query, user_id: str, action: str, context):
     if action == "inv4u_unknown_skip":
         idx = ss.get("current_unknown", 0)
         unknowns = ss.get("unknowns", [])
-        unknowns[idx]["status"] = "skipped"
+        if idx < len(unknowns):
+            unknowns[idx]["status"] = "skipped"
         idx += 1
         ss["current_unknown"] = idx
         payment_sync_sessions[user_id] = ss
@@ -5432,14 +5433,17 @@ async def handle_inv4u_callback(query, user_id: str, action: str, context):
             except Exception as e:
                 errors.append(f"תשלומים חודשיים: {e}")
 
-        # Write belt payments
+        # Write belt payments — skip unmatched records (student=None) to avoid blank-branch rows
         for m in matched_belts:
+            if not m.get("student"):
+                errors.append(f"חגורה לא זוהתה: {m['record'].get('customer_name','?')} — דלג")
+                continue
             rec = m["record"]
             parent = rec.get("parent_name", rec["customer_name"])
             children = rec.get("children", [])
             first_name = children[0] if children else parent.split()[0]
             last_name  = parent.split()[-1] if len(parent.split()) > 1 else ""
-            branch     = m["student"]["branch"] if m.get("student") else ""
+            branch     = m["student"]["branch"]
             try:
                 line = invoice4u_sync.write_belt_payment(
                     first_name, last_name, branch, rec["date"]

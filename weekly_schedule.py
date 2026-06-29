@@ -28,7 +28,7 @@ SCHEDULE = {
                 {"name": "ד-ו",           "time": "14:30-15:30"},
                 {"name": "ג",             "time": "15:30-16:30"},
                 {"name": "א-ב",           "time": "16:30-17:15"},
-                {"name": "גנים - חמישי",  "time": "17:15-18:00", "cancelled": True},
+                {"name": "גן חובה",  "time": "17:15-18:00", "cancelled": True},
                 {"name": "ז- בוגרים",     "time": "18:00-19:30"},
             ],
         },
@@ -49,7 +49,7 @@ SCHEDULE = {
             "branch": "אהרונוביץ",
             "tab":    "אהרונוביץ",
             "groups": [
-                {"name": "א-ו", "time": "13:50-14:50"},
+                {"name": "א-ה", "time": "13:50-14:50"},
             ],
         },
         {
@@ -77,7 +77,7 @@ SCHEDULE = {
                 {"name": "ד-ו",           "time": "14:30-15:30"},
                 {"name": "ג",             "time": "15:30-16:30"},
                 {"name": "א-ב",           "time": "16:30-17:15"},
-                {"name": "גנים - חמישי",  "time": "17:15-18:00"},
+                {"name": "גן חובה",  "time": "17:15-18:00"},
                 {"name": "ז- בוגרים",     "time": "18:00-19:30"},
             ],
         },
@@ -131,7 +131,7 @@ def branches_for_date(d) -> list[str]:
 # Groups listed here get "בוטל" written in training plans instead of actual content.
 CANCELLED_GROUPS: dict[int, dict[str, list[str]]] = {
     # ביום שני — גנים לא מתאמנת בסירקין (מתאמנת רק חמישי)
-    0: {"סירקין": ["גנים - חמישי"]},
+    0: {"סירקין": ["גן חובה"]},
 }
 
 

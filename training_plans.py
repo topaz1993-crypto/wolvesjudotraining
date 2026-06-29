@@ -973,13 +973,13 @@ def load_plan_from_sheet(branch: str, plan_date) -> dict:
     if col_idx is None:
         return {}
 
-    # Read group rows
-    group_rows = _find_group_rows(rows)  # [(start_row_0idx, end_row_0idx, group_name)]
+    # Read group rows — skip header (row 0) same as every other _find_group_rows call site
+    group_rows = _find_group_rows(rows[1:])  # indices are relative to rows[1:]
     result = {}
     for start_row, end_row, group_name in group_rows:
         items = {}
         for r_idx in range(start_row, end_row):  # end_row is exclusive
-            row = rows[r_idx] if r_idx < len(rows) else []
+            row = rows[r_idx + 1] if r_idx + 1 < len(rows) else []  # +1 for skipped header
             row_type = row[1].strip() if len(row) > 1 else ""
             val = row[col_idx].strip() if col_idx < len(row) else ""
             if row_type and val:
