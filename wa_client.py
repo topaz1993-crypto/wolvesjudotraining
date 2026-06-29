@@ -1,16 +1,14 @@
 """
-wa_client.py — Python wrapper for the WhatsApp bridge service.
+wa_client.py — WhatsApp bridge wrapper (optional feature).
+אם Node.js לא מותקן, כל הפונקציות מחזירות ערכי ברירת מחדל בשקט.
 """
 
 import os
 import time
-import base64
 import logging
 import subprocess
 import threading
 from pathlib import Path
-
-import httpx
 
 log = logging.getLogger(__name__)
 
@@ -19,84 +17,101 @@ WA_API_KEY = os.environ.get("WA_API_KEY", "wolves-wa-secret")
 BASE_URL   = f"http://127.0.0.1:{WA_PORT}"
 HEADERS    = {"x-api-key": WA_API_KEY}
 
-_process: subprocess.Popen | None = None
+_process = None
+_node_available = None  # cached check
 
 
-def _data_dir() -> Path:
-    return Path("/data") if Path("/data").exists() else Path(".")
+def _has_node() -> bool:
+    global _node_available
+    if _node_available is None:
+        try:
+            subprocess.run(["node", "--version"], capture_output=True, timeout=5)
+            _node_available = True
+        except Exception:
+            _node_available = False
+    return _node_available
 
 
-def _process_alive() -> bool:
-    return _process is not None and _process.poll() is None
+def _get_http():
+    """Lazy import of httpx to avoid import errors if not installed."""
+    try:
+        import httpx
+        return httpx
+    except ImportError:
+        return None
 
 
 def start_service():
-    """מפעיל את שירות ה-Node.js כ-subprocess."""
+    """מפעיל את שירות ה-Node.js כ-subprocess — רק אם Node קיים."""
     global _process
-
-    if _process_alive():
-        return  # Already running
+    if not _has_node():
+        log.info("Node.js not available — WhatsApp bridge disabled")
+        return
 
     service_dir = Path(__file__).parent / "whatsapp_service"
     if not service_dir.exists():
-        log.warning("whatsapp_service/ not found — WA bridge disabled")
+        log.warning("whatsapp_service/ not found")
         return
 
-    env = os.environ.copy()
-    env["WA_PORT"]                  = str(WA_PORT)
-    env["WA_API_KEY"]               = WA_API_KEY
-    env["DATA_DIR"]                 = str(_data_dir())
-    env["PUPPETEER_EXECUTABLE_PATH"] = "/usr/bin/chromium"
-    env["PUPPETEER_SKIP_CHROMIUM_DOWNLOAD"] = "true"
+    node_modules = service_dir / "node_modules"
+    if not node_modules.exists():
+        log.info("npm install for WhatsApp bridge...")
+        result = subprocess.run(
+            ["npm", "install", "--prefix", str(service_dir)],
+            capture_output=True, timeout=180
+        )
+        if result.returncode != 0:
+            log.error("npm install failed: %s", result.stderr.decode())
+            return
 
-    log.info("Starting WhatsApp bridge...")
+    env = os.environ.copy()
+    env["WA_PORT"]    = str(WA_PORT)
+    env["WA_API_KEY"] = WA_API_KEY
+    env["DATA_DIR"]   = str(Path("/data") if Path("/data").exists() else Path("."))
+
     _process = subprocess.Popen(
         ["node", str(service_dir / "index.js")],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
 
-    def _log_output():
+    def _log():
         for line in _process.stdout:
             log.info("[WA] %s", line.decode(errors="replace").rstrip())
-    threading.Thread(target=_log_output, daemon=True).start()
+    threading.Thread(target=_log, daemon=True).start()
 
-    # Wait up to 90s for HTTP server to respond
+    # Wait up to 90s for HTTP
+    httpx = _get_http()
+    if not httpx:
+        return
     for i in range(90):
         try:
             r = httpx.get(f"{BASE_URL}/status", headers=HEADERS, timeout=2)
             if r.status_code == 200:
-                log.info("WhatsApp bridge HTTP ready (after %ds)", i)
+                log.info("WA bridge ready after %ds", i)
                 return
         except Exception:
             pass
-        if not _process_alive():
-            log.error("WA bridge process died during startup")
+        if _process.poll() is not None:
+            log.error("WA bridge died during startup")
             return
         time.sleep(1)
-    log.warning("WhatsApp bridge did not respond in 90s")
-
-
-def ensure_running():
-    """Restart service if it died."""
-    if not _process_alive():
-        log.info("WA bridge not running — restarting")
-        threading.Thread(target=start_service, daemon=True).start()
 
 
 def get_status() -> dict:
-    ensure_running()
+    httpx = _get_http()
+    if not httpx or not _has_node():
+        return {"connected": False, "status": "node_unavailable", "has_qr": False}
     try:
-        r = httpx.get(f"{BASE_URL}/status", headers=HEADERS, timeout=5)
+        r = httpx.get(f"{BASE_URL}/status", headers=HEADERS, timeout=3)
         return r.json()
-    except Exception as e:
-        return {"connected": False, "status": f"bridge_error: {e}", "has_qr": False}
+    except Exception:
+        return {"connected": False, "status": "bridge_offline", "has_qr": False}
 
 
 def get_qr_base64() -> str | None:
-    """מחזיר QR כ-base64 PNG מה-HTTP endpoint, עם fallback לקובץ."""
-    # Try HTTP first
+    httpx = _get_http()
+    if not httpx:
+        return None
     try:
         r = httpx.get(f"{BASE_URL}/qr", headers=HEADERS, timeout=5)
         if r.status_code == 200:
@@ -106,33 +121,28 @@ def get_qr_base64() -> str | None:
                 return qr.split(",", 1)[1] if "," in qr else qr
     except Exception:
         pass
-
-    # Fallback: read from file written by Node.js
-    qr_file = _data_dir() / "wa_qr.txt"
+    # File fallback
+    qr_file = Path("/data/wa_qr.txt") if Path("/data").exists() else Path("wa_qr.txt")
     if qr_file.exists():
         raw = qr_file.read_text().strip()
         return raw.split(",", 1)[1] if "," in raw else raw
-
     return None
 
 
 def send_message(phone: str, message: str) -> bool:
+    httpx = _get_http()
+    if not httpx:
+        return False
     try:
         r = httpx.post(
-            f"{BASE_URL}/send",
-            headers=HEADERS,
-            json={"to": phone, "message": message},
-            timeout=15
+            f"{BASE_URL}/send", headers=HEADERS,
+            json={"to": phone, "message": message}, timeout=15
         )
         return r.json().get("success", False)
     except Exception as e:
-        log.error("wa send_message error: %s", e)
+        log.error("wa send error: %s", e)
         return False
 
 
 def is_connected() -> bool:
-    try:
-        r = httpx.get(f"{BASE_URL}/status", headers=HEADERS, timeout=3)
-        return r.json().get("connected", False)
-    except Exception:
-        return False
+    return get_status().get("connected", False)
