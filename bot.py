@@ -4687,9 +4687,6 @@ def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
 
 async def on_startup(app):
     """Notify Topaz when bot comes online."""
-    # Start WhatsApp bridge service
-    import threading
-    threading.Thread(target=wa_client.start_service, daemon=True).start()
     if TOPAZ_CHAT_ID:
         from datetime import datetime as _dt
         now = _dt.now().strftime("%d/%m/%Y %H:%M")
@@ -5840,6 +5837,9 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text("⏳ מפעיל שירות WhatsApp — זה לוקח עד 2 דקות בפעם הראשונה...")
+    # Start service on-demand (not at bot startup)
+    import threading
+    threading.Thread(target=wa_client.start_service, daemon=True).start()
 
     # Poll for QR up to 120 seconds, with status updates
     for i in range(120):

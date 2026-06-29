@@ -1,14 +1,13 @@
 {
   "name": "wolves-wa-bridge",
   "version": "2.0.0",
-  "description": "WhatsApp bridge — Baileys (no Chromium required)",
+  "description": "WhatsApp bridge — Baileys (no Chromium)",
   "main": "index.js",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "scripts": { "start": "node index.js" },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",
+    "@hapi/boom": "^10.0.1",
     "express": "^4.18.2",
     "qrcode": "^1.5.3",
     "pino": "^9.0.0"
