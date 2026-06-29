@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 # נתיבי קבצי אנשי קשר
-_BASE = Path(os.path.expanduser("~"))
+_BASE = Path(__file__).parent
 CONTACT_FILES = {
     "סירקין":    _BASE / "contacts.csv",
     "נווה ירק":  _BASE / "contacts (1).csv",
