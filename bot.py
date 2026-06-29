@@ -5842,6 +5842,47 @@ async def cmd_conv_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ שגיאה: {e}")
 
 
+
+async def cmd_migrate_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ממיר את היסטוריית השיחות הקיימת (conversation_history.json) לגיליון הלוג.
+    רץ פעם אחת בלבד — מסמן כל שורה כ-[מיגרציה].
+    """
+    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
+        return
+    await update.message.reply_text("⏳ מייצא היסטוריה קיימת לגיליון...")
+    try:
+        all_history = load_json(HISTORY_FILE, {})
+        total = 0
+        for user_id, msgs in all_history.items():
+            i = 0
+            while i < len(msgs) - 1:
+                if msgs[i]["role"] == "user" and msgs[i+1]["role"] == "assistant":
+                    user_msg  = msgs[i]["content"]
+                    bot_reply = msgs[i+1]["content"]
+                    # Skip system/context injections
+                    if user_msg.startswith("[נתונים]"):
+                        user_msg = user_msg.split("\n\n", 1)[-1]
+                    action = "תוכנית אימון" if any(k in bot_reply for k in ("חימום:", "תרגול:")) else "שיחה ישנה"
+                    conversation_log.log_conversation(
+                        user_msg[:500],
+                        bot_reply[:1000],
+                        action=action,
+                        notes="[מיגרציה]"
+                    )
+                    total += 1
+                    i += 2
+                else:
+                    i += 1
+        url = conversation_log.get_sheet_url()
+        await update.message.reply_text(
+            f"✅ יוצאו *{total}* שיחות לגיליון\n[פתח לוג]({url})",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה: {e}")
+
+
 async def cmd_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/delete_plan [סניף] [תאריך] — מחיקת תוכנית מהגיליון."""
     if not context.args or len(context.args) < 2:
@@ -5919,6 +5960,7 @@ def main():
     app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CommandHandler("add_missing", cmd_add_missing))
     app.add_handler(CommandHandler("conv_log", cmd_conv_log))
+    app.add_handler(CommandHandler("migrate_history", cmd_migrate_history))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
