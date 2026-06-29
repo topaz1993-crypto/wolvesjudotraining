@@ -280,7 +280,7 @@ def birthdays_this_week() -> list[dict]:
                         'phone': phone,
                         'branch': branch,
                         'date': bday_date,
-                        'day_str': f"{bd[2] if len(bd) > 2 else bday_date.day}/{bd[0]}",
+                        'day_str': f"{bd[1]}/{bd[0]}",
                     })
     results.sort(key=lambda x: x['date'])
     return results

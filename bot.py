@@ -299,11 +299,11 @@ def approved_buttons() -> InlineKeyboardMarkup:
     ])
 
 
-async def send_long(update: Update, text: str, reply_markup=None):
+async def send_long(update: Update, text: str, reply_markup=None, parse_mode=None):
     chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
     for i, chunk in enumerate(chunks):
         markup = reply_markup if i == len(chunks) - 1 else None
-        await update.message.reply_text(chunk, reply_markup=markup)
+        await update.message.reply_text(chunk, reply_markup=markup, parse_mode=parse_mode)
 
 
 CORRECTION_TRIGGERS = ("לא זה", "לא נכון", "תיקון:", "שגוי", "טעית", "תיקן:", "זה לא מה ש",
@@ -1217,7 +1217,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
-    if action == "menu_back":
+    if action in ("menu_back", "menu_main"):
         await show_main_menu(update)
         await query.answer()
         return
@@ -1335,6 +1335,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── Plan wizard — confirm save ──
+    if action == "pw_confirm":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        await _plan_wizard_save(query.message, user_id, ss)
+        sheets_sessions.pop(user_id, None)
+        return
+
+    if action == "pw_reedit":
+        await query.answer()
+        ss = sheets_sessions.get(user_id, {})
+        ss["step"] = "pw_waiting_plan"
+        sheets_sessions[user_id] = ss
+        await query.message.reply_text(
+            "✏️ שלח את התוכנית מחדש:",
+            reply_markup=cancel_button()
+        )
+        return
 
     if action == "menu_design":
         await query.answer()
@@ -1348,6 +1365,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("🟣 אהרונוביץ", callback_data="menu_design_אהרונוביץ")],
                 [InlineKeyboardButton("🔙 חזרה",      callback_data="menu_back")],
             ]))
+        return
+
+    if action.startswith("menu_design_"):
+        await query.answer()
+        branch = action[len("menu_design_"):]
+        msg = await query.edit_message_text(f"🎨 מעצב {branch}...")
+        try:
+            for group in att.BRANCH_GROUPS.get(branch, []):
+                att.apply_sheet_design(branch, group)
+            await query.edit_message_text(f"✅ עיצוב הוחל על {branch}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
         return
 
     if action == "menu_attendance":
@@ -1818,13 +1849,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows))
         return
 
+    if action.startswith("pm_gen_branch|"):
+        await query.answer()
+        branch = action.split("|", 1)[1]
+        contacts_list = contacts_db.get_branch_contacts(branch)
+        if not contacts_list:
+            await query.edit_message_text(f"❌ אין אנשי קשר עבור {branch}")
+            return
+        lines = [f"📢 *הודעה כללית — {branch}* ({len(contacts_list)} הורים)\n"]
+        for c in contacts_list[:5]:
+            lines.append(f"  📱 {c['raw']} — {c['phone']}")
+        if len(contacts_list) > 5:
+            lines.append(f"  ... ועוד {len(contacts_list)-5}")
+        sheets_sessions.pop(user_id, None)
+        await query.edit_message_text("\n".join(lines), parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזרה", callback_data="menu_back")]]))
+        return
+
     # ── בדיקת מיילים ──
     if action == "menu_check_emails":
         await query.answer()
         await query.message.chat.send_action("typing")
         try:
-            from email_reader import fetch_payment_emails
-            msgs = fetch_payment_emails()
+            msgs = email_reader.fetch_new_emails()
             if msgs:
                 await query.message.reply_text(
                     f"📧 *נמצאו {len(msgs)} מיילי תשלום*",
@@ -3046,7 +3093,7 @@ async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             try:
                 import re as _re
-                resp = _claude.messages.create(
+                resp = client.messages.create(
                     model="claude-haiku-4-5-20251001", max_tokens=200,
                     messages=[{"role": "user", "content": prompt}]
                 )
@@ -3502,9 +3549,9 @@ def _build_data_context(text: str) -> str:
 
     if any(k in t for k in absence_keywords):
         try:
-            log = load_json(Path("absence_log.json"), {})
+            absence_log_data = load_json(Path("absence_log.json"), {})
             streaks = []
-            for name, records in log.items():
+            for name, records in absence_log_data.items():
                 recent = records[-5:]
                 consecutive = 0
                 for r in reversed(recent):
@@ -3711,9 +3758,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Absence alerts
     try:
-        log = load_json(Path("absence_log.json"), {})
+        absence_log_stats = load_json(Path("absence_log.json"), {})
         alerts = []
-        for name, records in log.items():
+        for name, records in absence_log_stats.items():
             recent = records[-3:]
             if len(recent) >= 3 and all(r.get("absent") for r in recent):
                 alerts.append(name)
