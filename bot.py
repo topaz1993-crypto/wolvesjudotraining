@@ -5833,7 +5833,7 @@ async def cmd_update_student(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_connect — מחבר WhatsApp דרך QR."""
-    import io, asyncio
+    import io, asyncio, base64
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
         return
     if wa_client.is_connected():
