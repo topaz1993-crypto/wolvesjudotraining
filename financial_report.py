@@ -289,7 +289,7 @@ def build_annual_report(sheets_client) -> str:
 
     lines.append("─" * 44)
     lines.append(
-        f"{'סה\"כ':<10} ₪{total_inc:>7,} ₪{total_exp:>7,} ₪{total_prf:>7,}"
+        'סה"כ'.ljust(10) + ' ₪{:>7,} ₪{:>7,} ₪{:>7,}'.format(total_inc, total_exp, total_prf)
     )
     lines.append("\n_הוצאות חלקיות — מע\"מ, מס הכנסה ועמלות Grow חסרים לחודשים מסוימים_")
 
