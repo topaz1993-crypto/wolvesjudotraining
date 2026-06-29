@@ -1292,7 +1292,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             result = tp.save_full_day(branch, plan_date, plan_text)
             record_action(user_id, "plan_save", f"שמירת תוכנית {branch} {plan_date}",
-                          "plan_save", {"branch": branch, "plan_date": date_iso})
+                          {"branch": branch, "plan_date": date_iso})
             await query.message.reply_text(result, parse_mode="Markdown")
         except Exception as e:
             await query.message.reply_text(f"❌ שגיאה בשמירה: {e}")
