@@ -97,6 +97,22 @@ GROW_COMM_BY_MONTH = {
     "יולי":    0,
 }
 
+
+# הכנסות invoice4u (הורים) — מעודכן עד יוני 2026 (כולל מע"מ, נטו אחרי זיכויים)
+GROW_INCOME_BY_MONTH = {
+    "ספטמבר":  11400,
+    "אוקטובר": 39714,   # 39914 − 200 זיכוי (רעם הופמן)
+    "נובמבר":  57816,   # 58036 − 220 זיכוי (גיתית/אסף פנטי)
+    "דצמבר":   48690,
+    "ינואר":   51610,
+    "פברואר":  82623,
+    "מרץ":     52300,
+    "אפריל":   97569,
+    "מאי":     48998,
+    "יוני":    49346,
+    "יולי":    0,
+}
+
 SEASON_MONTHS = [
     "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
     "ינואר", "פברואר", "מרץ", "אפריל",
@@ -123,6 +139,7 @@ def _get_grow_income(sheets_client, month_he: str) -> tuple[int, int]:
     מחזיר: (סכום_הכנסות, מספר_תשלומים)
     
     הגיליון כבר קיים — payments_sheet.py מטפל בקריאה.
+    כגיבוי — נתוני invoice4u מעודכנים עד יוני 2026.
     """
     try:
         # ייבא את המודול הקיים
@@ -132,7 +149,9 @@ def _get_grow_income(sheets_client, month_he: str) -> tuple[int, int]:
             return int(data.get("total", 0)), int(data.get("count", 0))
     except Exception as e:
         log.warning("Grow income fetch error for %s: %s", month_he, e)
-    return 0, 0
+    # Fallback: נתוני invoice4u מאומתים
+    fallback = GROW_INCOME_BY_MONTH.get(month_he, 0)
+    return fallback, 0
 
 
 def _get_products_income(sheets_client, month_he: str) -> dict[str, int]:
