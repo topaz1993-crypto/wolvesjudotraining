@@ -721,9 +721,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום",
                          "EMOM", "E2MOM", "E1MOM", "AMRAP", "טבאטה", "Tabata",
-                         "שליחים", "ג'ונגל", "ביסט", "עיר הקרח", "ג'ודופונג",
+                         "שליחים", "ג'ונגל", "ביסט", "עיר הקרב", "ג'ודופונג",
                          "Bench", "Pull-up", "Rope Climb", "Box Jump")
-        is_training_plan = sum(1 for k in PLAN_KEYWORDS if k in reply) >= 2
+        # זיהוי מחמיר: חייב מבנה מסודר עם נקודותיים (חימום: / תרגול:) — לא רק מילות מפתח
+        PLAN_STRUCTURE = ("חימום:", "תרגול:", "קרבות:", "משחק:", "כוח:", "רנדורי:")
+        NEGATIVE_SIGNALS = ("באג", "צריך לתקן", "שגיאה בקוד", "הפונקציה", "לשמור לגיליון?",
+                            "תיקון", "הבוט כתב", "במקום להציג", "ארגומנטים")
+        has_structure = sum(1 for k in PLAN_STRUCTURE if k in reply) >= 2
+        has_negative  = any(n in reply for n in NEGATIVE_SIGNALS)
+        is_training_plan = has_structure and not has_negative
 
         if is_training_plan:
             # Detect branch+date from original request and store — so save works even
