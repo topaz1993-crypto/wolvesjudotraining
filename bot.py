@@ -35,6 +35,7 @@ import contacts as contacts_db
 import invoice4u_reader
 import invoice4u_sync
 import payment_matcher
+import registration_sync
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -4565,6 +4566,23 @@ def payment_approval_buttons(key: str) -> InlineKeyboardMarkup:
     ])
 
 
+
+async def registration_sync_job(context):
+    """Background job — runs every hour. Checks for new event registrations via WhatsApp emails."""
+    if not TOPAZ_CHAT_ID:
+        return
+    try:
+        report = registration_sync.run_sync_and_report()
+        if report:
+            await context.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text=report,
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        log.error(f"registration_sync_job error: {e}")
+
+
 async def email_monitor_job(context):
     """Background job — runs every 10 min. Checks Gmail for new payment emails."""
     if not TOPAZ_CHAT_ID:
@@ -5566,6 +5584,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     # Background jobs
     if TOPAZ_CHAT_ID and app.job_queue:
+        app.job_queue.run_repeating(registration_sync_job,        interval=3600,  first=90)
         app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
         app.job_queue.run_repeating(monthly_report_job,           interval=86400, first=120)
         app.job_queue.run_repeating(dropout_monitor_job,          interval=86400, first=180)
