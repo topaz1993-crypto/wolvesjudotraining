@@ -3617,6 +3617,29 @@ def _build_data_context(text: str) -> str:
         except Exception:
             pass
 
+    # Student name detection — 2 Hebrew words that match a known student
+    import re as _re2
+    name_trigger_words = ("תן לי פרטים", "פרטים על", "כרטיס של", "מי זה", "מה עם", "מה קורה עם")
+    has_name_trigger = any(k in t for k in name_trigger_words)
+    # Also trigger for short messages that look like a name (2-4 Hebrew words, no other content)
+    looks_like_name = bool(_re2.match(r"^[א-ת]{2,}(\s[א-ת]{2,}){1,3}$", t.strip()))
+    if has_name_trigger or looks_like_name:
+        try:
+            # Extract potential name: last 2-3 Hebrew words
+            words = _re2.findall(r'[א-ת]{2,}', t)
+            candidates = []
+            if len(words) >= 2:
+                candidates.append(" ".join(words[-2:]))
+            if len(words) >= 3:
+                candidates.append(" ".join(words[-3:]))
+            for candidate in candidates:
+                data = _search_student_everywhere(candidate)
+                if data:
+                    parts.append(_format_student_card_full(data))
+                    break
+        except Exception:
+            pass
+
     return "\n\n".join(parts)
 
 
@@ -4855,51 +4878,146 @@ async def weekly_summary_job(context):
 # 4. חיפוש ספורטאי (מורחב)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+def _search_student_everywhere(name: str) -> dict | None:
+    """
+    מחפש ספורטאי לפי שם בכל המקורות:
+    payments_report → lyla_sheet → camp_sheet → attendance sheets.
+    מחזיר dict עם כל הנתונים שנמצאו, או None.
+    """
+    import re as _re
+    name_clean = name.strip()
+    result = {
+        "name": name_clean,
+        "found_in": [],
+        "grade": "",
+        "branch": "",
+        "sub_type": "",
+        "payments": {},
+        "lyla": False,
+        "camp": False,
+        "camp_week": "",
+        "parent": None,
+    }
+    found_any = False
+
+    # 1. payments sheet
+    try:
+        all_st = payments_report.load_all_students()
+        name_l = name_clean.lower()
+        matches = [s for s in all_st if name_l in s.get("full_name", "").lower()]
+        if not matches:
+            from difflib import get_close_matches
+            names = [s["full_name"] for s in all_st]
+            close = get_close_matches(name_clean, names, n=1, cutoff=0.6)
+            matches = [s for s in all_st if s["full_name"] == close[0]] if close else []
+        if matches:
+            s = matches[0]
+            result["name"]     = s["full_name"]
+            result["grade"]    = s.get("grade", "")
+            result["branch"]   = s.get("club", "")
+            result["sub_type"] = s.get("sub_type", "")
+            result["payments"] = s.get("payments", {})
+            result["found_in"].append("תשלומים")
+            found_any = True
+    except Exception:
+        pass
+
+    # 2. לילה יפני
+    try:
+        lyla_students = lyla.get_students()
+        for s in lyla_students:
+            if name_clean in s["name"] or s["name"] in name_clean:
+                result["lyla"]   = True
+                result["grade"]  = result["grade"] or s.get("grade", "")
+                result["branch"] = result["branch"] or s.get("branch", "")
+                result["name"]   = result["name"] or s["name"]
+                result["found_in"].append("לילה יפני 🌸")
+                found_any = True
+                break
+    except Exception:
+        pass
+
+    # 3. מחנה קיץ
+    try:
+        camp_students = camp.get_students()
+        for s in camp_students:
+            if name_clean in s["name"] or s["name"] in name_clean:
+                result["camp"]      = True
+                result["camp_week"] = s.get("notes", "") or s.get("shirt", "")
+                result["grade"]     = result["grade"] or s.get("grade", "")
+                result["branch"]    = result["branch"] or s.get("branch", "")
+                result["name"]      = result["name"] or s["name"]
+                result["found_in"].append("מחנה קיץ ☀️")
+                found_any = True
+                break
+    except Exception:
+        pass
+
+    # 4. contacts — parent lookup
+    try:
+        parent = contacts_db.get_parent_for_student(result["name"], result["branch"] or None)
+        if parent:
+            result["parent"] = parent
+    except Exception:
+        pass
+
+    return result if found_any else None
+
+
+def _format_student_card_full(data: dict) -> str:
+    """מעצב כרטיס ספורטאי מלא מנתוני _search_student_everywhere."""
+    lines = [f"👤 *{data['name']}*"]
+    if data.get("branch"):
+        lines.append(f"📍 סניף: {data['branch']}")
+    if data.get("grade"):
+        lines.append(f"🏫 כיתה: {data['grade']}")
+    if data.get("sub_type"):
+        lines.append(f"📋 מנוי: {data['sub_type']}")
+
+    if data.get("found_in"):
+        lines.append(f"📂 רשום ב: {', '.join(data['found_in'])}")
+
+    if data.get("lyla"):
+        lines.append("🌸 לילה יפני: ✅ רשום")
+    if data.get("camp"):
+        week = f" ({data['camp_week']})" if data.get("camp_week") else ""
+        lines.append(f"☀️ מחנה קיץ: ✅ רשום{week}")
+
+    if data.get("payments"):
+        paid   = [f"{m}: {v}₪" for m, v in data["payments"].items() if v]
+        unpaid = [m for m, v in data["payments"].items() if not v]
+        if paid:
+            lines.append(f"\n✅ שילם: {', '.join(paid)}")
+        if unpaid:
+            lines.append(f"❌ חסר תשלום: {', '.join(unpaid)}")
+
+    if data.get("parent"):
+        p = data["parent"]
+        lines.append(f"\n👨‍👩‍👧 הורה: {p.get('parent_name', '—')}")
+        phone = p.get("phone", "")
+        if phone:
+            lines.append(f"📱 טלפון: {phone}")
+            wa = f"https://wa.me/972{phone.lstrip('0')}"
+            lines.append(f"[📲 WhatsApp]({wa})")
+
+    return "\n".join(lines)
+
+
 async def cmd_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/student <שם> — כרטיס ספורטאי מלא: חגורה, תשלומים, הורה + טלפון."""
+    """/student <שם> — כרטיס ספורטאי מלא מכל המקורות."""
     if not context.args:
-        await update.message.reply_text("שלח: `/student שם`\nדוגמה: `/student נועם`", parse_mode="Markdown")
+        await update.message.reply_text("שלח: `/student שם`\nדוגמה: `/student יובל עשור`", parse_mode="Markdown")
         return
     await update.message.chat.send_action("typing")
     name = " ".join(context.args)
 
-    # --- חיפוש חלקי: כל הספורטאים שמכילים את שם החיפוש ---
-    all_students = payments_report.load_all_students()
-    name_lower = name.strip().lower()
-    matches = [s for s in all_students if name_lower in s.get("full_name", "").lower()]
-
-    if not matches:
-        # נסה fuzzy
-        s = payments_report.student_card(name)
-        matches = [s] if s else []
-
-    if not matches:
-        await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*", parse_mode="Markdown")
+    data = _search_student_everywhere(name)
+    if not data:
+        await update.message.reply_text(f"❌ לא מצאתי ספורטאי בשם *{name}*\n\nנסה שם אחר או חלק מהשם.", parse_mode="Markdown")
         return
 
-    if len(matches) > 1:
-        names_list = "\n".join(f"  • {s['full_name']} ({s.get('club','')})" for s in matches[:10])
-        await update.message.reply_text(
-            f"🔍 נמצאו {len(matches)} ספורטאים:\n{names_list}\n\nשלח שם מלא לכרטיס מפורט.",
-            parse_mode="Markdown"
-        )
-        return
-
-    s = matches[0]
-    card = payments_report.format_student_card(s)
-
-    # --- הורה + טלפון ---
-    try:
-        parent = contacts_db.get_parent_for_student(s["full_name"], s.get("club"))
-        if parent:
-            card += f"\n\n👨‍👩‍👧 *הורה:* {parent.get('parent_name', '—')}"
-            card += f"\n📱 *טלפון:* {parent.get('phone', '—')}"
-            wa_link = f"https://wa.me/972{parent['phone'].lstrip('0')}" if parent.get('phone') else ""
-            if wa_link:
-                card += f"\n[📲 שלח WhatsApp]({wa_link})"
-    except Exception:
-        pass
-
+    card = _format_student_card_full(data)
     await send_long(update, card, parse_mode="Markdown")
 
 
