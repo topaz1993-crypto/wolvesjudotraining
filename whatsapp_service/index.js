@@ -1,160 +1,133 @@
 /**
- * Wolves Judo — WhatsApp Bridge Service
- * 
- * Express HTTP server שמנהל את חיבור ה-WhatsApp.
- * הבוט הפייתון מתקשר עם שירות זה דרך localhost.
- * 
- * נקודות קצה:
- *   GET  /status   — מצב החיבור
- *   GET  /qr       — תמונת QR כ-base64
- *   POST /send     — שלח הודעה { to, message }
+ * Wolves Judo — WhatsApp Bridge (Baileys — no Chromium)
+ *
+ * GET  /status   — connection status
+ * GET  /qr       — QR as base64 PNG
+ * POST /send     — { to, message }
  */
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const express = require('express');
-const qrcode  = require('qrcode');
-const path    = require('path');
-const fs      = require('fs');
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion
+} from "@whiskeysockets/baileys";
+import express    from "express";
+import qrcode     from "qrcode";
+import { Boom }   from "@hapi/boom";
+import pino       from "pino";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { join }   from "path";
 
-const PORT    = process.env.WA_PORT    || 3000;
-const API_KEY = process.env.WA_API_KEY || 'wolves-wa-secret';
-const DATA_DIR = process.env.DATA_DIR  || '/data';
+const PORT     = process.env.WA_PORT    || 3000;
+const API_KEY  = process.env.WA_API_KEY || "wolves-wa-secret";
+const DATA_DIR = process.env.DATA_DIR   || "/data";
+const AUTH_DIR = join(DATA_DIR, "wa_baileys_auth");
+
+if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true });
 
 // ── State ──────────────────────────────────────────────
-let currentQR     = null;   // latest QR string
-let qrBase64      = null;   // QR as PNG base64
-let isReady       = false;
-let statusMsg     = 'starting';
+let sock         = null;
+let qrBase64     = null;
+let isConnected  = false;
+let statusMsg    = "starting";
 
-// ── WhatsApp Client ────────────────────────────────────
-const client = new Client({
-  authStrategy: new LocalAuth({
-    dataPath: path.join(DATA_DIR, 'wa_session')
-  }),
-  puppeteer: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-gpu'
-    ]
-  }
-});
+const logger = pino({ level: "silent" }); // suppress Baileys verbose logs
 
-client.on('qr', async (qr) => {
-  currentQR = qr;
-  statusMsg = 'waiting_qr';
-  isReady   = false;
-  try {
-    qrBase64 = await qrcode.toDataURL(qr);
-    // Also save QR to file so Python can read it
-    fs.writeFileSync(path.join(DATA_DIR, 'wa_qr.txt'), qrBase64);
-    console.log('[WA] New QR generated');
-  } catch (e) {
-    console.error('[WA] QR error:', e);
-  }
-});
+// ── Connect ────────────────────────────────────────────
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  const { version }          = await fetchLatestBaileysVersion();
 
-client.on('ready', () => {
-  isReady   = true;
-  statusMsg = 'connected';
-  currentQR = null;
-  qrBase64  = null;
-  // Signal readiness to Python bot
-  fs.writeFileSync(path.join(DATA_DIR, 'wa_status.txt'), 'connected');
-  console.log('[WA] Client ready!');
-});
+  sock = makeWASocket({
+    version,
+    auth:           state,
+    logger,
+    printQRInTerminal: false,
+    browser: ["Wolves Judo", "Chrome", "1.0"],
+  });
 
-client.on('authenticated', () => {
-  statusMsg = 'authenticated';
-  console.log('[WA] Authenticated');
-});
+  sock.ev.on("creds.update", saveCreds);
 
-client.on('auth_failure', (msg) => {
-  statusMsg = 'auth_failed';
-  isReady   = false;
-  fs.writeFileSync(path.join(DATA_DIR, 'wa_status.txt'), 'disconnected');
-  console.error('[WA] Auth failure:', msg);
-});
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect, qr } = update;
 
-client.on('disconnected', (reason) => {
-  isReady   = false;
-  statusMsg = 'disconnected';
-  fs.writeFileSync(path.join(DATA_DIR, 'wa_status.txt'), 'disconnected');
-  console.warn('[WA] Disconnected:', reason);
-  // Try reconnect after 10 seconds
-  setTimeout(() => {
-    console.log('[WA] Attempting reconnect...');
-    client.initialize().catch(e => console.error('[WA] Reconnect failed:', e));
-  }, 10000);
-});
+    if (qr) {
+      statusMsg = "waiting_qr";
+      isConnected = false;
+      try {
+        qrBase64 = await qrcode.toDataURL(qr);
+        writeFileSync(join(DATA_DIR, "wa_qr.txt"), qrBase64);
+        console.log("[WA] QR generated");
+      } catch (e) {
+        console.error("[WA] QR error:", e);
+      }
+    }
+
+    if (connection === "open") {
+      isConnected = true;
+      statusMsg   = "connected";
+      qrBase64    = null;
+      writeFileSync(join(DATA_DIR, "wa_status.txt"), "connected");
+      console.log("[WA] Connected!");
+    }
+
+    if (connection === "close") {
+      isConnected = false;
+      const code  = lastDisconnect?.error instanceof Boom
+        ? lastDisconnect.error.output?.statusCode
+        : 0;
+      const shouldReconnect = code !== DisconnectReason.loggedOut;
+      statusMsg = shouldReconnect ? "reconnecting" : "logged_out";
+      writeFileSync(join(DATA_DIR, "wa_status.txt"), statusMsg);
+      console.log(`[WA] Disconnected (${code}) — reconnect: ${shouldReconnect}`);
+      if (shouldReconnect) {
+        setTimeout(connectToWhatsApp, 5000);
+      }
+    }
+  });
+}
 
 // ── HTTP Server ────────────────────────────────────────
 const app = express();
 app.use(express.json());
 
-// Simple API key auth
 app.use((req, res, next) => {
-  if (req.headers['x-api-key'] !== API_KEY) {
-    return res.status(401).json({ error: 'unauthorized' });
+  if (req.headers["x-api-key"] !== API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
   }
   next();
 });
 
-// GET /status
-app.get('/status', (req, res) => {
-  res.json({
-    connected: isReady,
-    status:    statusMsg,
-    has_qr:    qrBase64 !== null
-  });
+app.get("/status", (req, res) => {
+  res.json({ connected: isConnected, status: statusMsg, has_qr: qrBase64 !== null });
 });
 
-// GET /qr — returns QR image as base64 PNG
-app.get('/qr', (req, res) => {
-  if (isReady) {
-    return res.json({ connected: true, message: 'Already connected, no QR needed' });
-  }
-  if (!qrBase64) {
-    return res.status(202).json({ message: 'QR not ready yet, try again in a few seconds' });
-  }
+app.get("/qr", (req, res) => {
+  if (isConnected)  return res.json({ connected: true });
+  if (!qrBase64)    return res.status(202).json({ message: "QR not ready yet" });
   res.json({ qr: qrBase64 });
 });
 
-// POST /send — send a WhatsApp message
-// Body: { to: "972501234567", message: "שלום!" }
-app.post('/send', async (req, res) => {
+app.post("/send", async (req, res) => {
   const { to, message } = req.body;
-  if (!to || !message) {
-    return res.status(400).json({ error: 'Missing to or message' });
-  }
-  if (!isReady) {
-    return res.status(503).json({ error: 'WhatsApp not connected' });
-  }
+  if (!to || !message)  return res.status(400).json({ error: "Missing to/message" });
+  if (!isConnected)     return res.status(503).json({ error: "Not connected" });
+
   try {
-    // Normalize number: remove leading 0 and add country code if needed
-    let number = to.replace(/\D/g, '');
-    if (number.startsWith('0')) {
-      number = '972' + number.slice(1);
-    }
-    const chatId = number + '@c.us';
-    await client.sendMessage(chatId, message);
+    let number = to.replace(/\D/g, "");
+    if (number.startsWith("0")) number = "972" + number.slice(1);
+    const jid = number + "@s.whatsapp.net";
+    await sock.sendMessage(jid, { text: message });
     console.log(`[WA] Sent to ${number}`);
     res.json({ success: true, to: number });
   } catch (e) {
-    console.error('[WA] Send error:', e);
+    console.error("[WA] Send error:", e);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[WA] Bridge listening on port ${PORT}`);
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`[WA] Bridge on port ${PORT}`);
 });
 
-// ── Initialize ─────────────────────────────────────────
-client.initialize();
+connectToWhatsApp().catch(e => console.error("[WA] Init error:", e));
