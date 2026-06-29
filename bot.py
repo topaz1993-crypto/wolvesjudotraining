@@ -5190,6 +5190,27 @@ async def handle_inv4u_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
+
+async def cmd_activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/activate [סניף] [שם] — החזרת ספורטאי לפעיל."""
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ שימוש: /activate [סניף] [שם]\n"
+            "לדוגמה: /activate סירקין נועם כהן"
+        )
+        return
+    branch = context.args[0]
+    if branch not in att.BRANCH_SHEETS:
+        await update.message.reply_text(f"❌ סניף לא מוכר: {branch}\nסניפים: {', '.join(att.BRANCH_SHEETS.keys())}")
+        return
+    student_name = " ".join(context.args[1:])
+    msg = await update.message.reply_text(f"⏳ מחפש {student_name}...")
+    try:
+        result = att.activate_student(branch, student_name)
+        await msg.edit_text(result)
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה: {e}")
+
 async def cmd_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/deactivate [סניף] [שם] — סימון ספורטאי כלא פעיל בגיליון."""
     if not context.args or len(context.args) < 2:
@@ -5287,6 +5308,7 @@ def main():
     app.add_handler(CommandHandler("edit", cmd_edit))
     app.add_handler(CommandHandler("delete_plan", cmd_delete_plan))
     app.add_handler(CommandHandler("deactivate", cmd_deactivate))
+    app.add_handler(CommandHandler("activate", cmd_activate))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
