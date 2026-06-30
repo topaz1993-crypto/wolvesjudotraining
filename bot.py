@@ -37,7 +37,6 @@ import invoice4u_reader
 import invoice4u_sync
 import payment_matcher
 import registration_sync
-import conversation_log
 import wa_client
 
 # Israel timezone
@@ -769,14 +768,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = await call_claude(user_id, full_content)
     except Exception as e:
         log.error("Claude API error: %s", e)
-        conversation_log.log_conversation(user_text, "❌ שגיאת Claude", action="error", success=False)
         await update.message.reply_text("❌ שגיאה בתקשורת עם Claude. נסה שוב.")
         return
 
     # Log conversation for Cowork sync
     try:
         action_tag = "תוכנית אימון" if any(k in reply for k in ("חימום:", "תרגול:", "קרבות:")) else "תשובה כללית"
-        conversation_log.log_conversation(user_text, reply, action=action_tag)
     except Exception as _cle:
         log.debug(f"conv log skipped: {_cle}")
 
@@ -2911,10 +2908,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_b64 = base64.b64encode(bytes(data)).decode()
 
     reply = await call_claude(user_id, caption, image_b64=image_b64)
-    try:
-        conversation_log.log_conversation(f"[תמונה] {caption}", reply, action="תמונה")
-    except Exception:
-        pass
     await update.message.reply_text(reply)
 
 
@@ -6078,7 +6071,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /wa\_groups — שליחה לקבוצה
 /message [שם] — הודעה להורה
 
-🔄 *לוג שיחות*
 /conv\_log — קישור ללוג
 /migrate\_history — ייצוא שיחות ישנות
 
@@ -6436,66 +6428,6 @@ async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def cmd_conv_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """מחזיר קישור לגיליון לוג השיחות — לשימוש Cowork."""
-    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
-        return
-    try:
-        url = conversation_log.get_sheet_url()
-        recent = conversation_log.get_recent(5)
-        lines = [f"📋 *לוג שיחות בוט*", f"[פתח גיליון]({url})", ""]
-        if recent:
-            lines.append("*5 שיחות אחרונות:*")
-            for r in recent[-5:]:
-                lines.append(f"• `{r['time']}` {r['user_msg'][:60]}…")
-        else:
-            lines.append("_אין שיחות עדיין_")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"❌ שגיאה: {e}")
-
-
-
-async def cmd_migrate_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    ממיר את היסטוריית השיחות הקיימת (conversation_history.json) לגיליון הלוג.
-    רץ פעם אחת בלבד — מסמן כל שורה כ-[מיגרציה].
-    """
-    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
-        return
-    await update.message.reply_text("⏳ מייצא היסטוריה קיימת לגיליון...")
-    try:
-        all_history = load_json(HISTORY_FILE, {})
-        total = 0
-        for user_id, msgs in all_history.items():
-            i = 0
-            while i < len(msgs) - 1:
-                if msgs[i]["role"] == "user" and msgs[i+1]["role"] == "assistant":
-                    user_msg  = msgs[i]["content"]
-                    bot_reply = msgs[i+1]["content"]
-                    # Skip system/context injections
-                    if user_msg.startswith("[נתונים]"):
-                        user_msg = user_msg.split("\n\n", 1)[-1]
-                    action = "תוכנית אימון" if any(k in bot_reply for k in ("חימום:", "תרגול:")) else "שיחה ישנה"
-                    conversation_log.log_conversation(
-                        user_msg[:500],
-                        bot_reply[:1000],
-                        action=action,
-                        notes="[מיגרציה]"
-                    )
-                    total += 1
-                    i += 2
-                else:
-                    i += 1
-        url = conversation_log.get_sheet_url()
-        await update.message.reply_text(
-            f"✅ יוצאו *{total}* שיחות לגיליון\n[פתח לוג]({url})",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ שגיאה: {e}")
-
-
 async def cmd_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/delete_plan [סניף] [תאריך] — מחיקת תוכנית מהגיליון."""
     if not context.args or len(context.args) < 2:
@@ -6572,13 +6504,11 @@ def main():
     app.add_handler(CommandHandler("week_plan", cmd_week_plan))
     app.add_handler(CommandHandler("registrations", cmd_registrations))
     app.add_handler(CommandHandler("add_missing", cmd_add_missing))
-    app.add_handler(CommandHandler("conv_log", cmd_conv_log))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("wa_connect", cmd_wa_connect))
     app.add_handler(CommandHandler("wa_status", cmd_wa_status))
     app.add_handler(CommandHandler("wa_groups", cmd_wa_groups))
     app.add_handler(CommandHandler("contacts_import", cmd_contacts_import))
-    app.add_handler(CommandHandler("migrate_history", cmd_migrate_history))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
