@@ -62,6 +62,20 @@ HISTORY_FILE     = _DATA_DIR / "conversation_history.json"
 LOG_FILE         = _DATA_DIR / "training_log.json"
 PENDING_FILE     = _DATA_DIR / "pending_plans.json"
 CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
+WA_FAVORITES_FILE = _DATA_DIR / "wa_favorite_groups.json"
+
+WOLVES_KEYWORDS = ["wolves", "wolf", "ג'ודו", 'ג׳ודו', "וולבס", "טופז", "judo"]
+
+def _load_wa_favs() -> dict:
+    try:
+        with open(WA_FAVORITES_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_wa_favs(favs: dict) -> None:
+    with open(WA_FAVORITES_FILE, "w") as f:
+        json.dump(favs, f, ensure_ascii=False)
 
 
 def load_corrections() -> str:
@@ -800,6 +814,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = str(query.from_user.id)
     action = query.data
+    if action == "noop":
+        await query.answer()
+        return
 
     # ─── Plan edit callbacks ───
     if action.startswith("pe_branch|"):
@@ -2236,6 +2253,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action.startswith("wa_edit|"):
         await query.answer("✏️ שלח את הטקסט המעודכן")
+        return
+
+    if action.startswith("wa_star|"):
+        group_id = action.split("|", 1)[1]
+        groups_data = context.bot_data.get("wa_groups", {})
+        group = groups_data.get(group_id, {})
+        group_name = group.get("name", group_id)
+        favs = _load_wa_favs()
+        if group_id in favs:
+            del favs[group_id]
+            msg = f"💫 הוסר מהמועדפים: {group_name}"
+        else:
+            favs[group_id] = group_name
+            msg = f"⭐ נשמר במועדפים: {group_name}"
+        _save_wa_favs(favs)
+        await query.answer(msg, show_alert=True)
         return
 
     if action.startswith("wa_group_pick|"):
@@ -5932,28 +5965,68 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/wa_groups — מציג קבוצות WhatsApp ומאפשר שליחה."""
+    """/wa_groups [חיפוש] — מציג קבוצות WhatsApp ומאפשר שליחה."""
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
         return
     if not wa_client.is_connected():
         await update.message.reply_text("❌ WhatsApp לא מחובר — שלח /wa_connect")
         return
 
+    keyword = " ".join(context.args or []).strip().lower()
+
     groups = wa_client.get_groups()
     if not groups:
         await update.message.reply_text("❌ לא נמצאו קבוצות או שגיאה בחיבור")
         return
 
-    # Store groups in context for later use
+    # Store all groups in context
     context.bot_data["wa_groups"] = {g["id"]: g for g in groups}
+    favs = _load_wa_favs()
+
+    # Separate into favorites and wolves-related
+    fav_list, wolves_list = [], []
+    for g in groups:
+        name = g.get("name", "").strip()
+        if not name:
+            continue
+        gid = g["id"]
+        name_lower = name.lower()
+        if keyword:
+            if keyword in name_lower and gid not in favs:
+                wolves_list.append(g)
+        else:
+            if gid in favs:
+                fav_list.append(g)
+            elif any(kw in name_lower for kw in WOLVES_KEYWORDS):
+                wolves_list.append(g)
+
+    sections = []
+    if fav_list:
+        sections.append(("⭐ מועדפים", fav_list))
+    if wolves_list:
+        title = "🥋 קבוצות וולבס ג'ודו" if not keyword else f"🔍 תוצאות: {keyword}"
+        sections.append((title, wolves_list))
+
+    if not sections:
+        # Fallback: show first 20 named groups
+        named = [g for g in groups if g.get("name", "").strip()][:20]
+        sections.append(("📱 קבוצות", named))
 
     buttons = []
-    for g in groups[:20]:  # max 20 groups
-        label = f"{g['name']} ({g['size']} משתתפים)"[:50]
-        buttons.append([InlineKeyboardButton(label, callback_data=f"wa_group_pick|{g['id']}")])
+    for section_title, section_groups in sections:
+        buttons.append([InlineKeyboardButton(f"── {section_title} ──", callback_data="noop")])
+        for g in section_groups[:15]:
+            name = g["name"][:35]
+            star_icon = "⭐ " if g["id"] in favs else ""
+            buttons.append([
+                InlineKeyboardButton(f"{star_icon}{name}", callback_data=f"wa_group_pick|{g['id']}"),
+                InlineKeyboardButton("⭐", callback_data=f"wa_star|{g['id']}")
+            ])
 
+    named_count = len([g for g in groups if g.get("name", "").strip()])
+    hint = "💡 לחץ ⭐ לשמירת קבוצה במועדפים\nחיפוש: /wa_groups [מילת חיפוש]"
     await update.message.reply_text(
-        f"📱 *{len(groups)} קבוצות WhatsApp:*\nבחר קבוצה לשליחה:",
+        f"📱 *{named_count} קבוצות נמצאו:*\n{hint}",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
