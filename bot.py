@@ -2251,10 +2251,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ שליחה בוטלה")
         return
 
-    if action.startswith("wa_edit|"):
-        await query.answer("✏️ שלח את הטקסט המעודכן")
-        return
-
     if action.startswith("wa_star|"):
         group_id = action.split("|", 1)[1]
         groups_data = context.bot_data.get("wa_groups", {})
@@ -6079,7 +6075,7 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if i == 30:
             await msg.edit_text("⏳ עדיין מאתחל — רגע...")
         elif i == 60:
-            await msg.edit_text("⏳ Chromium לוקח זמן — עוד קצת...")
+            await msg.edit_text("⏳ WhatsApp Bridge לוקח זמן — עוד קצת...")
         elif i == 90:
             st = wa_client.get_status()
             await msg.edit_text(f"⏳ מצב: `{st.get('status', '?')}` — ממשיך לחכות...", parse_mode="Markdown")
@@ -6123,7 +6119,6 @@ async def wa_send_with_approval(
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ שלח", callback_data=f"wa_send|{key}"),
-            InlineKeyboardButton("✏️ ערוך", callback_data=f"wa_edit|{key}"),
             InlineKeyboardButton("❌ בטל", callback_data=f"wa_cancel|{key}"),
         ]
     ])

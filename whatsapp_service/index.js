@@ -115,9 +115,11 @@ app.post("/reconnect", async (req, res) => {
   qrBase64    = null;
   // Clear auth files so a fresh QR is generated
   try {
-    const { rmSync } = await import("fs");
+    const { rmSync, unlinkSync } = await import("fs");
     rmSync(AUTH_DIR, { recursive: true, force: true });
     mkdirSync(AUTH_DIR, { recursive: true });
+    // Clear stale QR file so Python doesn't serve expired QR from disk
+    try { unlinkSync(join(DATA_DIR, "wa_qr.txt")); } catch (_) {}
   } catch (e) {
     console.warn("[WA] Could not clear auth dir:", e.message);
   }
