@@ -6024,7 +6024,7 @@ async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
 
     named_count = len([g for g in groups if g.get("name", "").strip()])
-    hint = "💡 לחץ ⭐ לשמירת קבוצה במועדפים\nחיפוש: /wa_groups [מילת חיפוש]"
+    hint = "💡 לחץ ⭐ לשמירת קבוצה במועדפים\nחיפוש: /wa_groups + מילת חיפוש"
     await update.message.reply_text(
         f"📱 *{named_count} קבוצות נמצאו:*\n{hint}",
         parse_mode="Markdown",
