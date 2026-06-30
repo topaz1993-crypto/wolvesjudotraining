@@ -64,7 +64,7 @@ PENDING_FILE     = _DATA_DIR / "pending_plans.json"
 CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
 WA_FAVORITES_FILE = _DATA_DIR / "wa_favorite_groups.json"
 
-WOLVES_KEYWORDS = ["wolves", "wolf", "ג'ודו", 'ג׳ודו', "וולבס", "טופז", "judo"]
+WOLVES_KEYWORDS = ["wolves", "wolf", "ג'ודו", 'ג׳ודו', "וולבס", "טופז", "judo", "גודו", "איפון פייט", "מועדון הג"]
 
 def _load_wa_favs() -> dict:
     try:
