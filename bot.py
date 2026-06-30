@@ -6060,9 +6060,11 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Service running but not connected — force reconnect
         wa_client.force_reconnect()
 
+    loop = asyncio.get_event_loop()
+
     # Poll for QR up to 120 seconds, with status updates
     for i in range(120):
-        qr = wa_client.get_qr_base64()
+        qr = await loop.run_in_executor(None, wa_client.get_qr_base64)
         if qr:
             try:
                 img_bytes = base64.b64decode(qr)
@@ -6076,7 +6078,8 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ שגיאה בשליחת QR: {e}")
             return
 
-        if wa_client.is_connected():
+        connected = await loop.run_in_executor(None, wa_client.is_connected)
+        if connected:
             await msg.edit_text("✅ WhatsApp מחובר!")
             return
 
@@ -6086,7 +6089,7 @@ async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif i == 60:
             await msg.edit_text("⏳ WhatsApp Bridge לוקח זמן — עוד קצת...")
         elif i == 90:
-            st = wa_client.get_status()
+            st = await loop.run_in_executor(None, wa_client.get_status)
             await msg.edit_text(f"⏳ מצב: `{st.get('status', '?')}` — ממשיך לחכות...", parse_mode="Markdown")
 
         await asyncio.sleep(1)
