@@ -4,6 +4,7 @@ Wolves Judo — Training Plan Agent + Attendance (Telegram Bot)
 
 import os
 import json
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +64,8 @@ LOG_FILE         = _DATA_DIR / "training_log.json"
 PENDING_FILE     = _DATA_DIR / "pending_plans.json"
 CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
 WA_FAVORITES_FILE = _DATA_DIR / "wa_favorite_groups.json"
+
+contacts_db.set_data_dir(_DATA_DIR)
 
 WOLVES_KEYWORDS = ["wolves", "wolf", "ג'ודו", 'ג׳ודו', "וולבס", "טופז", "judo", "גודו", "איפון פייט", "מועדון הג"]
 
@@ -557,6 +560,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handle_inv4u_text(update, context):
         return
 
+    # WhatsApp send flow (contact search / message input)
+    if await handle_wa_flow_text(update, context):
+        return
+
     # Sheets (camp/lyla) text flow
     if await handle_sheets_text(update, context):
         return
@@ -690,6 +697,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await lyla_command(update, context)
         return
 
+    # "שלח להורי [שם]: [הודעה]" shortcut → straight to preview
+    import re as _re
+    _m = _re.match(r"שלח לה?ו?ר[יה]?\s+(.+?)[:—]\s+(.+)", user_text, _re.DOTALL)
+    if _m:
+        _athlete = _m.group(1).strip()
+        _msg = _m.group(2).strip()
+        _parents = contacts_db.find_parent(_athlete)
+        if not _parents:
+            await update.message.reply_text(f"❌ לא נמצא איש קשר עבור *{_athlete}*", parse_mode="Markdown")
+        elif len(_parents) == 1:
+            _p = _parents[0]
+            await wa_send_with_approval(context, str(update.effective_chat.id),
+                                        _p["phone"], _p["parent_name"], _msg)
+        else:
+            _buttons = []
+            for _p in _parents[:5]:
+                _label = f"{_p['parent_name']} ({_p['phone'][-4:]})"[:50]
+                _flow_phone = _p["phone"]
+                context.user_data.setdefault("wa_shortcut_msg", {})
+                context.user_data["wa_shortcut_msg"][_flow_phone] = {"name": _p["parent_name"], "msg": _msg}
+                _buttons.append([InlineKeyboardButton(_label, callback_data=f"wa_shortcut|{_flow_phone}")])
+            await update.message.reply_text(
+                f"📱 נמצאו כמה התאמות עבור *{_athlete}*. בחר:",
+                parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(_buttons)
+            )
+        return
+
+    # "שלח הודעה" / "שלח לקבוצה" → pick recipient screen
+    if any(t in user_text for t in ("שלח הודעה", "שלח לקבוצה", "שלח ב-וואטסאפ", "שלח בוואטסאפ")):
+        await _wa_show_pick_recipient(update, context)
+        return
+
     # Detect if user pasted a ready-made belt ceremony message back to the bot
     if "אני שמח לעדכן" in user_text and "חגורה" in user_text and "טקס מעבר חגורה" in user_text:
         await update.message.reply_text(
@@ -723,19 +762,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full_content = f"[נתונים]\n{data_context}\n\n{user_text}"
     elif extra_context:
         full_content = f"{user_text}\n\n[הקשר אוטומטי]\n{extra_context}"
-
-    # Check if user is typing a message for a WhatsApp group
-    pending_group = context.bot_data.get("wa_pending_group")
-    if pending_group:
-        del context.bot_data["wa_pending_group"]
-        await wa_send_with_approval(
-            context,
-            chat_id=str(update.effective_chat.id),
-            phone=pending_group["id"],  # group JID
-            recipient_name=f"קבוצה: {pending_group['name']}",
-            message=user_text
-        )
-        return
 
     await update.message.chat.send_action("typing")
 
@@ -2236,10 +2262,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not wa_client.is_connected():
             await query.edit_message_text("❌ WhatsApp לא מחובר — שלח /wa\_connect")
             return
-        ok = wa_client.send_message(pending["phone"], pending["message"])
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(
+            None, lambda: wa_client.send_message(pending["phone"], pending["message"])
+        )
         if ok:
-            await query.edit_message_text(f"✅ נשלח בהצלחה ל-{pending['phone']}")
+            name = pending.get("recipient_name") or pending["phone"]
+            await query.edit_message_text(f"✅ נשלח בהצלחה ל-{name}")
             context.bot_data.pop(key, None)
+            context.user_data.pop("wa_flow", None)
         else:
             await query.edit_message_text("❌ שגיאה בשליחה — בדוק /wa\_status")
         return
@@ -2248,7 +2279,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         key = action.split("|", 1)[1]
         context.bot_data.pop(key, None)
+        context.user_data.pop("wa_flow", None)
         await query.edit_message_text("❌ שליחה בוטלה")
+        return
+
+    if action.startswith("wa_edit|"):
+        await query.answer()
+        key = action.split("|", 1)[1]
+        pending = context.bot_data.get(key)
+        if not pending:
+            await query.edit_message_text("❌ הפעולה פגה — נסה שוב")
+            return
+        # Restore flow state so next text → new preview
+        context.user_data["wa_flow"] = {
+            "state": "await_message",
+            "recipient": {
+                "phone": pending["phone"],
+                "name": pending.get("recipient_name", pending["phone"]),
+            },
+        }
+        context.bot_data.pop(key, None)
+        await query.edit_message_text("✏️ שלח את הנוסח המעודכן:")
         return
 
     if action.startswith("wa_star|"):
@@ -2273,14 +2324,82 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         groups = context.bot_data.get("wa_groups", {})
         group = groups.get(group_id, {})
         group_name = group.get("name", group_id)
-        # Store selected group, wait for user to type message
-        context.bot_data["wa_pending_group"] = {"id": group_id, "name": group_name}
+        context.user_data["wa_flow"] = {
+            "state": "await_message",
+            "recipient": {"phone": group_id, "name": group_name, "type": "group"},
+        }
         await query.edit_message_text(
-            f"✅ בחרת: *{group_name}*\n\nעכשיו שלח את ההודעה שתרצה לשלוח לקבוצה:",
+            f"✅ בחרת: *{group_name}*\n\nשלח את ההודעה לקבוצה:",
             parse_mode="Markdown"
         )
         return
 
+    if action.startswith("wa_flow_group|"):
+        await query.answer()
+        group_id = action.split("|", 1)[1]
+        favs = _load_wa_favs()
+        group_name = favs.get(group_id, group_id)
+        context.user_data["wa_flow"] = {
+            "state": "await_message",
+            "recipient": {"phone": group_id, "name": group_name, "type": "group"},
+        }
+        await query.edit_message_text(
+            f"✅ *{group_name}*\n\nשלח את ההודעה:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if action == "wa_flow_search":
+        await query.answer()
+        flow = context.user_data.get("wa_flow", {})
+        flow["state"] = "contact_search"
+        context.user_data["wa_flow"] = flow
+        await query.edit_message_text("🔍 מה שם הספורטאי?")
+        return
+
+    if action == "wa_flow_cancel":
+        await query.answer()
+        context.user_data.pop("wa_flow", None)
+        await query.edit_message_text("❌ בוטל")
+        return
+
+    if action.startswith("wa_flow_contact|"):
+        await query.answer()
+        phone = action.split("|", 1)[1]
+        flow = context.user_data.get("wa_flow", {})
+        results = flow.get("_contact_results", {})
+        contact = results.get(phone, {})
+        parent_name = contact.get("parent_name") or phone
+        athlete_name = contact.get("athlete_name") or ""
+        display_name = f"{parent_name} (הורה של {athlete_name})" if athlete_name else parent_name
+        context.user_data["wa_flow"] = {
+            "state": "await_message",
+            "recipient": {"phone": phone, "name": display_name, "type": "contact"},
+        }
+        await query.edit_message_text(
+            f"✅ *{display_name}*\n\nשלח את ההודעה:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if action.startswith("wa_shortcut|"):
+        await query.answer()
+        phone = action.split("|", 1)[1]
+        shortcuts = context.user_data.get("wa_shortcut_msg", {})
+        info = shortcuts.get(phone, {})
+        if not info:
+            await query.edit_message_text("❌ הפעולה פגה")
+            return
+        context.user_data.pop("wa_shortcut_msg", None)
+        await query.edit_message_text(
+            f"✅ בחרת: *{info['name']}*\n\nמציג תצוגה מקדימה...",
+            parse_mode="Markdown"
+        )
+        await wa_send_with_approval(
+            context, str(query.message.chat_id),
+            phone, info["name"], info["msg"]
+        )
+        return
 
 
 def attendance_student_keyboard(session: dict) -> InlineKeyboardMarkup:
@@ -5970,6 +6089,132 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def _wa_show_pick_recipient(update: Update, context):
+    """Show 'למי לשלוח?' screen — favorites + contact search."""
+    favs = _load_wa_favs()
+    buttons = []
+
+    if favs:
+        buttons.append([InlineKeyboardButton("── ⭐ מועדפות ──", callback_data="noop")])
+        for gid, gname in list(favs.items())[:8]:
+            buttons.append([InlineKeyboardButton(f"⭐ {gname}"[:50], callback_data=f"wa_flow_group|{gid}")])
+
+    buttons.append([InlineKeyboardButton("── 👥 איש קשר ──", callback_data="noop")])
+    buttons.append([InlineKeyboardButton("🔍 חפש לפי שם ספורטאי", callback_data="wa_flow_search")])
+    buttons.append([InlineKeyboardButton("❌ בטל", callback_data="wa_flow_cancel")])
+
+    context.user_data["wa_flow"] = {"state": "pick_recipient"}
+    await update.message.reply_text(
+        "📱 *למי לשלוח?*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def handle_wa_flow_text(update: Update, context) -> bool:
+    """Handle text input for an active WA send flow. Returns True if consumed."""
+    flow = context.user_data.get("wa_flow")
+    if not flow:
+        return False
+
+    state = flow.get("state")
+    text = update.message.text.strip()
+
+    if state == "contact_search":
+        results = contacts_db.search_contacts(text)
+        if not results:
+            await update.message.reply_text(
+                "❌ לא נמצא. נסה שם אחר (שם ספורטאי):",
+            )
+            return True
+        buttons = []
+        for r in results[:6]:
+            athlete = r.get("athlete_name")
+            label = (f"{r['parent_name']} ← {athlete}" if athlete else r["parent_name"])[:50]
+            verified_icon = "✅ " if r.get("verified") else ""
+            buttons.append([InlineKeyboardButton(
+                f"{verified_icon}{label}",
+                callback_data=f"wa_flow_contact|{r['phone']}"
+            )])
+        buttons.append([InlineKeyboardButton("❌ בטל", callback_data="wa_flow_cancel")])
+        # Store results so callback can look up name
+        flow["_contact_results"] = {r["phone"]: r for r in results[:6]}
+        context.user_data["wa_flow"] = flow
+        await update.message.reply_text("📱 בחר איש קשר:", reply_markup=InlineKeyboardMarkup(buttons))
+        return True
+
+    if state == "await_message":
+        flow["message"] = text
+        flow["state"] = "preview"
+        context.user_data["wa_flow"] = flow
+        recipient = flow.get("recipient", {})
+        await wa_send_with_approval(
+            context,
+            chat_id=str(update.effective_chat.id),
+            phone=recipient.get("phone", ""),
+            recipient_name=recipient.get("name", "?"),
+            message=text,
+        )
+        return True
+
+    return False
+
+
+async def cmd_contacts_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/contacts_import — טוען מחדש את קבצי ה-CSV ומאמת מול גיליונות הנוכחות."""
+    if str(update.effective_user.id) != TOPAZ_CHAT_ID:
+        return
+    msg = await update.message.reply_text("⏳ טוען ומאמת אנשי קשר...")
+    loop = asyncio.get_event_loop()
+
+    try:
+        # Fetch all student names from sheets per branch
+        service = await loop.run_in_executor(None, att._get_service)
+
+        branch_students: dict[str, list[str]] = {}
+        import_branches = {
+            "סירקין":    (att.BRANCH_SHEETS["סירקין"],    att.BRANCH_GROUPS["סירקין"]),
+            "נווה ירק":  (att.BRANCH_SHEETS["נווה ירק"],  att.BRANCH_GROUPS["נווה ירק"]),
+            "חגור":      (att.BRANCH_SHEETS["חגור"],      att.BRANCH_GROUPS["חגור"]),
+            "אהרונוביץ": (att.BRANCH_SHEETS["אהרונוביץ"], att.BRANCH_GROUPS["אהרונוביץ"]),
+        }
+
+        for branch, (sheet_id, groups) in import_branches.items():
+            names: set[str] = set()
+            for group in groups:
+                try:
+                    students = await loop.run_in_executor(
+                        None, lambda s=sheet_id, g=group: att.get_students(service, s, g)
+                    )
+                    names.update(n for _, n in students)
+                except Exception:
+                    pass  # Group tab might not exist
+            branch_students[branch] = list(names)
+
+        result = await loop.run_in_executor(
+            None, lambda: contacts_db.import_and_verify(branch_students)
+        )
+
+        total_students = sum(len(v) for v in branch_students.values())
+        lines = [
+            f"✅ *ייבוא הושלם*\n",
+            f"📋 סה\"כ אנשי קשר: *{result['total']}*",
+            f"✅ מאומתים (נמצא ספורטאי): *{result['verified']}*",
+            f"⚠️ לא מאומתים: *{result['unverified']}*",
+            f"\n🥋 ספורטאים בגיליונות:",
+        ]
+        for b, names in branch_students.items():
+            lines.append(f"  • {b}: {len(names)}")
+        lines.append(f"  סה\"כ: {total_students}")
+        lines.append("\n_הנתונים נשמרו. חיפוש לפי שם ספורטאי יעבוד עכשיו._")
+
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        log.error("contacts_import error: %s", e)
+        await msg.edit_text(f"❌ שגיאה: {e}")
+
+
 async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_groups [חיפוש] — מציג קבוצות WhatsApp ומאפשר שליחה."""
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
@@ -6039,7 +6284,7 @@ async def cmd_wa_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wa_connect — מחבר WhatsApp דרך QR."""
-    import io, asyncio, base64
+    import io, base64
     if str(update.effective_user.id) != TOPAZ_CHAT_ID:
         return
     if wa_client.is_connected():
@@ -6126,11 +6371,12 @@ async def wa_send_with_approval(
     import json
     # Store pending message in context
     key = f"wa_{phone}_{int(__import__('time').time())}"
-    context.bot_data[key] = {"phone": phone, "message": message}
+    context.bot_data[key] = {"phone": phone, "message": message, "recipient_name": recipient_name}
 
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ שלח", callback_data=f"wa_send|{key}"),
+            InlineKeyboardButton("✏️ ערוך", callback_data=f"wa_edit|{key}"),
             InlineKeyboardButton("❌ בטל", callback_data=f"wa_cancel|{key}"),
         ]
     ])
@@ -6331,6 +6577,7 @@ def main():
     app.add_handler(CommandHandler("wa_connect", cmd_wa_connect))
     app.add_handler(CommandHandler("wa_status", cmd_wa_status))
     app.add_handler(CommandHandler("wa_groups", cmd_wa_groups))
+    app.add_handler(CommandHandler("contacts_import", cmd_contacts_import))
     app.add_handler(CommandHandler("migrate_history", cmd_migrate_history))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CallbackQueryHandler(handle_callback))

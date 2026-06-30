@@ -4,7 +4,7 @@ contacts.py — ספריית אנשי קשר: הורים, ספורטאים, טל
 מאפשר הצלבה עם גיליונות נוכחות לזיהוי הורה מתוך שם ספורטאי.
 """
 
-import csv, re, os
+import csv, re, os, json
 from pathlib import Path
 from typing import Optional
 
@@ -290,3 +290,130 @@ def get_parent_for_student(athlete_name: str, branch: str = None) -> dict:
     """Return best parent match for athlete, or empty dict."""
     parents = find_parent(athlete_name, branch)
     return parents[0] if parents else {}
+
+
+# ──────────────────────────────────────────────
+# Verified cache — contacts matched to real students
+# ──────────────────────────────────────────────
+
+_VERIFIED_FILE: Path | None = None
+
+
+def set_data_dir(data_dir: Path):
+    global _VERIFIED_FILE
+    _VERIFIED_FILE = Path(data_dir) / "contacts_verified.json"
+
+
+def load_verified_cache() -> dict:
+    if _VERIFIED_FILE and _VERIFIED_FILE.exists():
+        try:
+            return json.loads(_VERIFIED_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_verified_cache(data: dict):
+    if _VERIFIED_FILE:
+        _VERIFIED_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+
+def import_and_verify(branch_students: dict) -> dict:
+    """
+    Cross-reference CSV contacts with known student names from sheets.
+    branch_students: {branch: [student_name, ...]}
+    Saves result to verified cache and returns summary.
+    """
+    _cache.clear()  # force reload from CSV files
+
+    result: dict[str, dict] = {}
+    verified = unverified = 0
+
+    for branch in CONTACT_FILES:
+        students = branch_students.get(branch, [])
+        # (student_name, frozenset_of_heb_words)
+        student_index = [(s, frozenset(_heb_words(s))) for s in students if _heb_words(s)]
+
+        for c in _load(branch):
+            raw_words = set(_heb_words(c["raw"]))
+            matched_athlete = None
+
+            for sname, swords in student_index:
+                if len(swords) >= 2 and swords.issubset(raw_words):
+                    matched_athlete = sname
+                    break
+
+            phone = c["phone"]
+            if matched_athlete:
+                aw = set(_heb_words(matched_athlete))
+                parent_words = [w for w in _heb_words(c["raw"]) if w not in aw]
+                parent_name = " ".join(parent_words[:3]) or c["raw"]
+                result[phone] = {
+                    "parent_name": parent_name,
+                    "athlete_name": matched_athlete,
+                    "branch": branch,
+                    "verified": True,
+                }
+                verified += 1
+            else:
+                result[phone] = {
+                    "parent_name": c["raw"],
+                    "athlete_name": None,
+                    "branch": branch,
+                    "verified": False,
+                }
+                unverified += 1
+
+    save_verified_cache(result)
+    return {"total": verified + unverified, "verified": verified, "unverified": unverified}
+
+
+def search_contacts(query: str, branch: str = None) -> list[dict]:
+    """
+    Search contacts by athlete or parent name.
+    Checks verified cache first (better name split), then raw CSV.
+    Returns up to 8 matches: [{parent_name, athlete_name, phone, branch, verified}]
+    """
+    qwords = _heb_words(query)
+    if not qwords:
+        return []
+
+    cache = load_verified_cache()
+    seen = set()
+    scored: list[tuple[int, dict]] = []
+
+    # Verified cache — clean parent/athlete split
+    for phone, info in cache.items():
+        aw = _heb_words(info.get("athlete_name") or "")
+        pw = _heb_words(info.get("parent_name") or "")
+        score = sum(1 for w in qwords if w in aw + pw)
+        if score and (branch is None or info["branch"] == branch):
+            scored.append((score, {
+                "parent_name": info.get("parent_name") or "",
+                "athlete_name": info.get("athlete_name"),
+                "phone": phone,
+                "branch": info["branch"],
+                "verified": info.get("verified", False),
+            }))
+            seen.add(phone)
+
+    # Raw CSV fallback for contacts not in cache
+    for c in _load_all():
+        if c["phone"] in seen:
+            continue
+        if branch and c["branch"] != branch:
+            continue
+        score = sum(1 for w in qwords if w in _heb_words(c["raw"]))
+        if score:
+            scored.append((score, {
+                "parent_name": c["raw"],
+                "athlete_name": None,
+                "phone": c["phone"],
+                "branch": c["branch"],
+                "verified": False,
+            }))
+
+    scored.sort(key=lambda x: -x[0])
+    return [item for _, item in scored[:8]]
