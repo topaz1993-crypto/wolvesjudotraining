@@ -313,12 +313,33 @@ def _find_or_create_date_column(service, spreadsheet_id: str, sheet_name: str, s
     return new_col, True
 
 
+def _normalize_sheet_name(name: str) -> str:
+    """Normalize sheet name for fuzzy matching: strip spaces, unify dashes/geresh."""
+    import unicodedata
+    n = name.strip()
+    # Replace various dashes and minus signs with a simple hyphen
+    n = n.replace("–", "-").replace("—", "-").replace("־", "-")
+    # Remove geresh (׳) and regular apostrophes used after Hebrew letters
+    n = n.replace("׳", "").replace("'", "").replace("’", "")
+    n = n.replace(" ", "")
+    return n
+
+
 def _get_sheet_id(service, spreadsheet_id: str, sheet_name: str) -> int:
     meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    for s in meta["sheets"]:
+    sheets = meta["sheets"]
+    # Exact match first
+    for s in sheets:
         if s["properties"]["title"] == sheet_name:
             return s["properties"]["sheetId"]
-    raise ValueError(f"Sheet '{sheet_name}' not found")
+    # Fuzzy match: normalize both sides
+    norm_target = _normalize_sheet_name(sheet_name)
+    for s in sheets:
+        title = s["properties"]["title"]
+        if _normalize_sheet_name(title) == norm_target:
+            return s["properties"]["sheetId"]
+    available = [s["properties"]["title"] for s in sheets]
+    raise ValueError(f"Sheet '{sheet_name}' not found. Available: {available}")
 
 
 def _is_attendance_color(bg: dict) -> bool:
