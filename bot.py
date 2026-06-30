@@ -39,6 +39,10 @@ import registration_sync
 import conversation_log
 import wa_client
 
+# Israel timezone
+import zoneinfo as _zoneinfo
+IL_TZ = _zoneinfo.ZoneInfo("Asia/Jerusalem")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -345,7 +349,7 @@ async def call_claude(user_id: str, user_content: str, image_b64=None) -> str:
 
 
 async def deliver_csv(context, chat_id: str, reply_text: str, csv_content: str):
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(IL_TZ).strftime("%Y-%m-%d")
     filename = f"training_{date_str}.csv"
     Path(filename).write_text(csv_content, encoding="utf-8-sig")
 
@@ -2332,7 +2336,7 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not schedule:
         day_names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-        day = day_names[__import__("datetime").datetime.now().weekday()]
+        day = day_names[__import__("datetime").datetime.now(IL_TZ).weekday()]
         await update.message.reply_text(
             f"אין אימונים מתוכננים היום ({day}).\n"
             "ניתן לציין ידנית: *נוכחות סירקין ד-ו*",
@@ -2341,7 +2345,7 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return True
 
     day_names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-    day = day_names[__import__("datetime").datetime.now().weekday()]
+    day = day_names[__import__("datetime").datetime.now(IL_TZ).weekday()]
     await update.message.reply_text(
         f"📅 *אימוני היום — {day}*\nבחר קבוצה:",
         parse_mode="Markdown",
@@ -2631,7 +2635,7 @@ async def handle_new_student_text(update: Update, context: ContextTypes.DEFAULT_
 
         # Calendar reminder for tomorrow to follow up with new student's parents
         try:
-            today = session.get("date", datetime.now().strftime("%d/%m/%Y"))
+            today = session.get("date", datetime.now(IL_TZ).strftime("%d/%m/%Y"))
             branch = next((b for b, g_list in att.BRANCH_GROUPS.items() if session["sheet_name"] in g_list), "")
             abt.create_new_student_reminder(full_name, branch, session["sheet_name"], today)
         except Exception as e:
@@ -3306,7 +3310,7 @@ async def monthly_report_job(context):
     """Background job — sends monthly financial report on the 1st of each month."""
     if not TOPAZ_CHAT_ID:
         return
-    today = datetime.now()
+    today = datetime.now(IL_TZ)
     if today.day != 1:
         return
     try:
@@ -3324,7 +3328,7 @@ async def dropout_monitor_job(context):
     """Background job — weekly dropout check."""
     if not TOPAZ_CHAT_ID:
         return
-    today = datetime.now()
+    today = datetime.now(IL_TZ)
     if today.weekday() != 6:  # Sunday only
         return
     try:
@@ -3867,7 +3871,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = att.get_todays_schedule()
     if schedule:
         day_names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-        day = day_names[__import__("datetime").datetime.now().weekday()]
+        day = day_names[__import__("datetime").datetime.now(IL_TZ).weekday()]
         lines.append(f"📅 *היום ({day}):*")
         for branch, group, time in schedule:
             lines.append(f"  {time} — {branch} {group}")
@@ -4687,7 +4691,7 @@ def record_action(user_id: str, action_type: str, description: str, undo_data: d
         "type":        action_type,
         "description": description,
         "undo_data":   undo_data,
-        "timestamp":   datetime.now().isoformat(),
+        "timestamp":   datetime.now(IL_TZ).isoformat(),
     })
     # Keep last 10 actions
     action_history[user_id] = history[-10:]
@@ -4745,7 +4749,7 @@ async def on_startup(app):
     """Notify Topaz when bot comes online."""
     if TOPAZ_CHAT_ID:
         from datetime import datetime as _dt
-        now = _dt.now().strftime("%d/%m/%Y %H:%M")
+        now = _dt.now(IL_TZ).strftime("%d/%m/%Y %H:%M")
         try:
             await app.bot.send_message(
                 chat_id=TOPAZ_CHAT_ID,
@@ -4910,7 +4914,7 @@ async def daily_training_reminder_job(context):
     """Runs every morning at 07:00 Israel time — daily summary with calendar + training."""
     if not TOPAZ_CHAT_ID:
         return
-    hour = datetime.now().hour
+    hour = datetime.now(IL_TZ).hour
     if hour != 7:
         return
 
@@ -5020,7 +5024,7 @@ async def weekly_summary_job(context):
         return
     from datetime import date as _date, timedelta as _td
     today = _date.today()
-    hour = datetime.now().hour
+    hour = datetime.now(IL_TZ).hour
     if today.weekday() != 6 or hour != 8:
         return
 
