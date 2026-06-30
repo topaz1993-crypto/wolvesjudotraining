@@ -4775,7 +4775,17 @@ async def wa_payment_reminder_job(context: ContextTypes.DEFAULT_TYPE):
         log.error(f"wa_payment_reminder_job error: {e}")
 
 async def on_startup(app):
-    """Notify Topaz when bot comes online."""
+    """Notify Topaz when bot comes online + auto-reconnect WhatsApp in background."""
+    import threading as _threading
+    # Auto-start WA service in background (non-blocking)
+    # Auth files persist on /data disk, so no QR needed after restart
+    def _bg_wa():
+        try:
+            wa_client.start_service()
+        except Exception as e:
+            log.warning("WA auto-start failed: %s", e)
+    _threading.Thread(target=_bg_wa, daemon=True).start()
+
     if TOPAZ_CHAT_ID:
         from datetime import datetime as _dt
         now = _dt.now(IL_TZ).strftime("%d/%m/%Y %H:%M")
