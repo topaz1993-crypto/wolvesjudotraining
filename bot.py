@@ -65,6 +65,7 @@ CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
 WA_FAVORITES_FILE = _DATA_DIR / "wa_favorite_groups.json"
 
 contacts_db.set_data_dir(_DATA_DIR)
+abt.set_data_dir(_DATA_DIR)
 
 WOLVES_KEYWORDS = ["wolves", "wolf", "ג'ודו", 'ג׳ודו', "וולבס", "טופז", "judo", "גודו", "איפון פייט", "מועדון הג"]
 
@@ -1223,7 +1224,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from datetime import date as _d
         date_str = _d.today().strftime("%d/%m/%Y")
         # Count consecutive absences
-        log_data = load_json(Path("absence_log.json"), {})
+        log_data = load_json(_DATA_DIR / "absence_log.json", {})
         records = log_data.get(name, [])
         consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
         msg = contacts_db.compose_absence_message(name, branch, date_str, consecutive=max(consec, 1))
@@ -1267,7 +1268,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for name in absent_names:
             try:
                 # Count consecutive absences
-                log_data = load_json(Path("absence_log.json"), {})
+                log_data = load_json(_DATA_DIR / "absence_log.json", {})
                 records = log_data.get(name, [])
                 consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
                 txt = contacts_db.compose_absence_message(name, branch, date_str, consecutive=consec)
@@ -1820,7 +1821,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.message.chat.send_action("typing")
         try:
-            log_data = load_json(Path("absence_log.json"), {})
+            log_data = load_json(_DATA_DIR / "absence_log.json", {})
             alerts = []
             warnings = []
             for name, records in log_data.items():
@@ -2613,11 +2614,15 @@ async def handle_attendance_callback(query, user_id: str, action: str, context):
         present_names = [name for i, (_, name) in enumerate(students, 1) if i not in absent and i not in dropout_indices]
         absent_names  = [name for i, (_, name) in enumerate(students, 1) if i in absent]
 
+        del attendance_sessions[user_id]
+
         # Record absences and check for 3-streak alerts
         branch = next((b for b, g_list in att.BRANCH_GROUPS.items() if session["sheet_name"] in g_list), "")
-        alert_names = abt.record_attendance(students, absent, session["date"], branch, session["sheet_name"])
-
-        del attendance_sessions[user_id]
+        try:
+            alert_names = abt.record_attendance(students, absent, session["date"], branch, session["sheet_name"])
+        except Exception as e:
+            log.error("Absence record error: %s", e)
+            alert_names = []
 
         msg = f"✅ *{session['sheet_name']} — {session['date']}*\n"
         msg += f"🟢 הגיעו ({len(present_names)}): {', '.join(present_names)}\n"
@@ -2670,7 +2675,7 @@ async def handle_attendance_callback(query, user_id: str, action: str, context):
                     if parents:
                         p = parents[0]
                         # Check for consecutive absences
-                        log_data = load_json(Path("absence_log.json"), {})
+                        log_data = load_json(_DATA_DIR / "absence_log.json", {})
                         records = log_data.get(name, [])
                         consec = sum(1 for r in reversed(records[-5:]) if r.get("absent"))
                         streak_note = f" ⚠️ {consec} ברצף" if consec >= 2 else ""
@@ -3767,7 +3772,7 @@ def _build_data_context(text: str) -> str:
 
     if any(k in t for k in absence_keywords):
         try:
-            absence_log_data = load_json(Path("absence_log.json"), {})
+            absence_log_data = load_json(_DATA_DIR / "absence_log.json", {})
             streaks = []
             for name, records in absence_log_data.items():
                 recent = records[-5:]
@@ -3976,7 +3981,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Absence alerts
     try:
-        absence_log_stats = load_json(Path("absence_log.json"), {})
+        absence_log_stats = load_json(_DATA_DIR / "absence_log.json", {})
         alerts = []
         for name, records in absence_log_stats.items():
             recent = records[-3:]
@@ -5106,7 +5111,7 @@ async def daily_training_reminder_job(context):
 
     # ── התראות היעדרות חריגה ──
     try:
-        absence_log = load_json(Path("absence_log.json"), {})
+        absence_log = load_json(_DATA_DIR / "absence_log.json", {})
         alerts = []
         for name, records in absence_log.items():
             recent = records[-4:]

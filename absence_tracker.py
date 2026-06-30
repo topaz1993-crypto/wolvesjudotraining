@@ -16,6 +16,11 @@ ABSENCE_FILE = Path("absence_log.json")
 JUDO_TASKS_CALENDAR_ID = "8rdpp62g6ufcjrh5cmfus41l4k@group.calendar.google.com"
 
 
+def set_data_dir(data_dir: Path):
+    global ABSENCE_FILE
+    ABSENCE_FILE = Path(data_dir) / "absence_log.json"
+
+
 def _get_calendar_service():
     b64 = os.environ.get("GOOGLE_CREDS_B64")
     if b64:
