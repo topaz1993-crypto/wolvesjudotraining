@@ -2590,10 +2590,19 @@ async def handle_attendance_callback(query, user_id: str, action: str, context):
         dropout_indices = session.get("dropouts", set())
         students = session["students"]
 
-        # Clear undo file before processing this session's dropouts
         att.clear_dropout_undo()
 
-        # Process dropouts first (reverse order so row indices stay valid)
+        # Mark attendance FIRST with original row numbers still intact:
+        # green/red for active students, black for dropouts.
+        # Must happen before mark_as_dropout deletes rows and shifts indices.
+        try:
+            att.mark_attendance(session, absent, dropout_indices)
+        except Exception as e:
+            log.error("Attendance mark error: %s", e)
+            await query.edit_message_text(f"❌ שגיאה בסימון: {e}")
+            return
+
+        # Now delete dropout rows (row numbers no longer matter for coloring)
         dropout_names = []
         for idx in sorted(dropout_indices, reverse=True):
             try:
@@ -2602,14 +2611,6 @@ async def handle_attendance_callback(query, user_id: str, action: str, context):
                 abt.remove_student(name)
             except Exception as e:
                 log.error("Dropout error: %s", e)
-
-        # Mark attendance for remaining students
-        try:
-            att.mark_attendance(session, absent)
-        except Exception as e:
-            log.error("Attendance mark error: %s", e)
-            await query.edit_message_text(f"❌ שגיאה בסימון: {e}")
-            return
 
         present_names = [name for i, (_, name) in enumerate(students, 1) if i not in absent and i not in dropout_indices]
         absent_names  = [name for i, (_, name) in enumerate(students, 1) if i in absent]

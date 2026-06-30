@@ -485,20 +485,28 @@ def _recolor_name_cols(service, spreadsheet_id: str, sheet_name: str, sheet_id: 
     ).execute()
 
 
-def mark_attendance(session: dict, absent_indices: set[int]):
+def mark_attendance(session: dict, absent_indices: set[int], dropout_indices: set[int] = None):
     """
-    Mark attendance in the sheet.
-    absent_indices: set of 1-based numbers from the displayed student list (1=first student).
+    Mark attendance in the sheet using ORIGINAL row numbers (before any row deletion).
+    Must be called BEFORE mark_as_dropout to avoid row-shift issues.
+    absent_indices: 1-based indices of absent students.
+    dropout_indices: 1-based indices of dropouts (marked black).
     """
     service = _get_service()
     spreadsheet_id = session["spreadsheet_id"]
     sheet_id = session["sheet_id"]
     col = session["col"]
     students = session["students"]
+    dropout_set = dropout_indices or set()
 
     requests = []
     for list_num, (row, name) in enumerate(students, start=1):
-        color = RED if list_num in absent_indices else GREEN
+        if list_num in dropout_set:
+            color = BLACK
+        elif list_num in absent_indices:
+            color = RED
+        else:
+            color = GREEN
         requests.append({
             "repeatCell": {
                 "range": {
