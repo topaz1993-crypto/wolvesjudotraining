@@ -195,7 +195,7 @@ def calendar_buttons() -> InlineKeyboardMarkup:
 PLAN_GROUPS = {
     "סירקין":     ["ד-ו", "ג", "א-ב", "גן חובה", "ז-בוגרים"],
     "חגור":       ["ד-ח", "א-ג", "גנים"],
-    "נווה ירק":   ["גנים", "ג-ז", "א-ב"],
+    "נווה ירק":   ["גנים", "ג-ו", "א-ב"],
     "אהרונוביץ":  ["א-ה"],
     "איפון פייט": ["ב-ד", "ה-ז"],
     "פונקציונלי": ["ז-ח", 'ט-י"ב'],
@@ -751,7 +751,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if all_group_names:
             extra_context = _arc.suggest_context_for_claude(detected_branch, all_group_names)
         else:
-            for grp in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ז", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז-בוגרים", 'ט-י"ב', "נבחרת"]:
+            for grp in ["גנים", "א-ב", "א-ג", "ב-ד", "ג", "ג-ו", "ד-ו", "ד-ח", "ה-ז", "ז-ח", "ז-בוגרים", 'ט-י"ב', "נבחרת"]:
                 if grp in user_text:
                     extra_context = _arc.format_history(detected_branch, grp, n=3)
                     break
@@ -1515,7 +1515,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "סירקין":    [("ד-ו","bw_group|ד-ו"), ("ג","bw_group|ג"), ("א-ב","bw_group|א-ב"),
                           ("גנים","bw_group|גנים"), ("ז-בוגרים","bw_group|ז-בוגרים"), ("נבחרת","bw_group|נבחרת")],
             "חגור":      [("ד-ח","bw_group|ד-ח"), ("א-ג","bw_group|א-ג"), ("גנים","bw_group|גנים")],
-            "נווה ירק":  [("גנים","bw_group|גנים"), ("ג-ז","bw_group|ג-ז"), ("א-ב","bw_group|א-ב")],
+            "נווה ירק":  [("גנים","bw_group|גנים"), ("ג-ו","bw_group|ג-ו"), ("א-ב","bw_group|א-ב")],
             "אהרונוביץ": [("א-ה","bw_group|א-ה")],
         }
         rows = []
@@ -4432,7 +4432,7 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ("סירקין",  "בוגרים", "שני"):   "19:30",
             ("סירקין",  "ז",      "שני"):   "19:30",
             ("נווה ירק","גנים",   "שלישי"): "16:45",
-            ("נווה ירק","ג-ז",    "שלישי"): "17:45",
+            ("נווה ירק","ג-ו",    "שלישי"): "16:45",
             ("נווה ירק","א-ב",    "שלישי"): "18:30",
             ("אהרונוביץ","א",     "רביעי"): "14:50",
             ("אהרונוביץ","ג",     "רביעי"): "14:50",
