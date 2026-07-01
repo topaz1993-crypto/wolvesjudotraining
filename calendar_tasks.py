@@ -14,6 +14,11 @@ import re
 
 RECENT_EVENTS_FILE = Path("recent_calendar_events.json")
 
+
+def set_data_dir(data_dir: Path):
+    global RECENT_EVENTS_FILE
+    RECENT_EVENTS_FILE = Path(data_dir) / "recent_calendar_events.json"
+
 warnings.filterwarnings("ignore")
 import googleapiclient.discovery
 
