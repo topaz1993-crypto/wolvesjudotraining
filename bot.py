@@ -2149,7 +2149,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Attendance callbacks handled separately (they call query.answer() themselves)
     if action.startswith("att_"):
-        if action.startswith("att_start_"):
+        if action == "att_show_yesterday":
+            await query.answer()
+            day_names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
+            yesterday_day = day_names[(__import__("datetime").datetime.now(IL_TZ).weekday() - 1) % 7]
+            yesterday_schedule = att.get_schedule_by_offset(-1)
+            if not yesterday_schedule:
+                await query.edit_message_text(f"אין אימונים מתוכננים לאתמול ({yesterday_day}).")
+            else:
+                await query.edit_message_text(
+                    f"📅 *אימוני אתמול — {yesterday_day}*\nבחר קבוצה:",
+                    parse_mode="Markdown",
+                    reply_markup=todays_schedule_keyboard(yesterday_schedule, prefix="att_yesterday_"),
+                )
+        elif action.startswith("att_yesterday_"):
+            _, branch_group = action.split("att_yesterday_", 1)
+            branch, group = branch_group.split("||")
+            await query.answer()
+            await query.edit_message_reply_markup(reply_markup=None)
+            await context.bot.send_message(chat_id=query.message.chat_id, text="⏳ טוען רשימה (אתמול)...")
+            await start_attendance_session(context.bot, query.message.chat_id, user_id, branch, group, date_offset=-1)
+        elif action.startswith("att_start_"):
             _, branch_group = action.split("att_start_", 1)
             branch, group = branch_group.split("||")
             await query.answer()
@@ -2425,21 +2445,23 @@ def attendance_student_keyboard(session: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-def todays_schedule_keyboard(schedule: list) -> InlineKeyboardMarkup:
-    """Keyboard with one button per group training today."""
+def todays_schedule_keyboard(schedule: list, prefix: str = "att_start_") -> InlineKeyboardMarkup:
+    """Keyboard with one button per group training session."""
     buttons = []
     for branch, group, time in schedule:
         buttons.append([InlineKeyboardButton(
             f"⏰ {time}  {branch} — {group}",
-            callback_data=f"att_start_{branch}||{group}"
+            callback_data=f"{prefix}{branch}||{group}"
         )])
+    if prefix == "att_start_":
+        buttons.append([InlineKeyboardButton("📅 אימוני אתמול", callback_data="att_show_yesterday")])
     return InlineKeyboardMarkup(buttons)
 
 
-async def start_attendance_session(bot, chat_id: str, user_id: str, branch: str, group: str):
+async def start_attendance_session(bot, chat_id: str, user_id: str, branch: str, group: str, date_offset: int = 0):
     """Load students and show attendance keyboard."""
     try:
-        session = att.prepare_attendance(branch, group)
+        session = att.prepare_attendance(branch, group, date_offset=date_offset)
     except Exception as e:
         log.error("Attendance prepare error: %s", e)
         await bot.send_message(chat_id=chat_id, text=f"❌ שגיאה בטעינת הרשימה: {e}")
@@ -2449,9 +2471,10 @@ async def start_attendance_session(bot, chat_id: str, user_id: str, branch: str,
     attendance_sessions[user_id] = session
 
     keyboard = attendance_student_keyboard(session)
+    day_label = " (אתמול)" if date_offset == -1 else ""
     await bot.send_message(
         chat_id=chat_id,
-        text=f"📋 *{branch} — {group}* | {session['date']}\n\n"
+        text=f"📋 *{branch} — {group}*{day_label} | {session['date']}\n\n"
              "לחץ על שם להחליף נוכחות 🟢/🔴\nבסוף לחץ *שמור*",
         parse_mode="Markdown",
         reply_markup=keyboard,

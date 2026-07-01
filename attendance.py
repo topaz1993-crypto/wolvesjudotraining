@@ -110,6 +110,13 @@ def get_todays_schedule() -> list[tuple[str, str, str]]:
     return WEEKLY_SCHEDULE.get(day, [])
 
 
+def get_schedule_by_offset(offset: int = 0) -> list[tuple[str, str, str]]:
+    """Return (branch, group, time) for today+offset. offset=-1 for yesterday."""
+    from datetime import timedelta
+    day = (datetime.now() + timedelta(days=offset)).weekday()
+    return WEEKLY_SCHEDULE.get(day, [])
+
+
 def _get_service():
     # Support both local pickle and base64 env var (for Render)
     b64 = os.environ.get("GOOGLE_CREDS_B64")
@@ -442,17 +449,19 @@ def cleanup_all_empty_columns() -> dict:
     return results
 
 
-def prepare_attendance(branch: str, group: str) -> dict:
+def prepare_attendance(branch: str, group: str, date_offset: int = 0) -> dict:
     """
-    Load students and find/create today's column.
+    Load students and find/create attendance column for today+date_offset.
+    date_offset=0 → today, date_offset=-1 → yesterday.
     Returns a session dict to be stored in bot state.
     """
+    from datetime import timedelta
     service = _get_service()
     spreadsheet_id = BRANCH_SHEETS[branch]
     sheet_id = _get_sheet_id(service, spreadsheet_id, group)
-    today = datetime.now()
+    target_date = datetime.now() + timedelta(days=date_offset)
 
-    col, col_is_new = _find_or_create_date_column(service, spreadsheet_id, group, sheet_id, today)
+    col, col_is_new = _find_or_create_date_column(service, spreadsheet_id, group, sheet_id, target_date)
     students = get_students(service, spreadsheet_id, group)
 
     return {
@@ -462,7 +471,7 @@ def prepare_attendance(branch: str, group: str) -> dict:
         "col": col,
         "col_is_new": col_is_new,
         "students": students,
-        "date": today.strftime("%d/%m/%Y"),
+        "date": target_date.strftime("%d/%m/%Y"),
         "branch": branch,
     }
 
