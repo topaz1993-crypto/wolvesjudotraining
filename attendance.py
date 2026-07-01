@@ -16,6 +16,11 @@ import googleapiclient.discovery
 
 DROPOUT_UNDO_FILE = Path("dropout_undo.json")
 
+
+def set_data_dir(data_dir: Path):
+    global DROPOUT_UNDO_FILE
+    DROPOUT_UNDO_FILE = Path(data_dir) / "dropout_undo.json"
+
 HEBREW_MONTHS = {
     1: "ינואר", 2: "פברואר", 3: "מרץ", 4: "אפריל",
     5: "מאי", 6: "יוני", 7: "יולי", 8: "אוגוסט",
