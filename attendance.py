@@ -47,6 +47,20 @@ BRANCH_GROUPS = {
     "חגור":       ["ד-ח", "א-ג", "גנים"],
 }
 
+# Map (spreadsheet_id, logical_group_name) → actual tab name in Google Sheet
+# Used when the physical tab name differs from the canonical group name in BRANCH_GROUPS
+_SHEET_TAB_ALIASES: dict[tuple[str, str], str] = {
+    # נווה ירק: tab is still named "ג-ז" — should be renamed to "ג-ו" in the sheet
+    ("1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU", "ג-ו"): "ג-ז",
+    # אהרונוביץ: tab is named "ג-ו" (grades 3-6) but bot uses "א-ה"
+    ("1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E", "א-ה"): "ג-ו",
+}
+
+
+def _resolve_tab_name(spreadsheet_id: str, group_name: str) -> str:
+    """Return the actual Google Sheet tab name for a given group (may differ from canonical name)."""
+    return _SHEET_TAB_ALIASES.get((spreadsheet_id, group_name), group_name)
+
 GREEN = {"red": 0.0, "green": 1.0, "blue": 0.0}
 RED   = {"red": 1.0, "green": 0.0, "blue": 0.0}
 BLACK = {"red": 0.0, "green": 0.0, "blue": 0.0}
@@ -458,15 +472,16 @@ def prepare_attendance(branch: str, group: str, date_offset: int = 0) -> dict:
     from datetime import timedelta
     service = _get_service()
     spreadsheet_id = BRANCH_SHEETS[branch]
-    sheet_id = _get_sheet_id(service, spreadsheet_id, group)
+    tab_name = _resolve_tab_name(spreadsheet_id, group)  # actual sheet tab (may differ from group name)
+    sheet_id = _get_sheet_id(service, spreadsheet_id, tab_name)
     target_date = datetime.now() + timedelta(days=date_offset)
 
-    col, col_is_new = _find_or_create_date_column(service, spreadsheet_id, group, sheet_id, target_date)
-    students = get_students(service, spreadsheet_id, group)
+    col, col_is_new = _find_or_create_date_column(service, spreadsheet_id, tab_name, sheet_id, target_date)
+    students = get_students(service, spreadsheet_id, tab_name)
 
     return {
         "spreadsheet_id": spreadsheet_id,
-        "sheet_name": group,
+        "sheet_name": tab_name,
         "sheet_id": sheet_id,
         "col": col,
         "col_is_new": col_is_new,
