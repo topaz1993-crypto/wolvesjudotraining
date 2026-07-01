@@ -3320,6 +3320,34 @@ async def cmd_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ שגיאה: {e}")
 
 
+async def cmd_email_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/email_debug — אבחון חיבור Gmail ומיילי invoice4u."""
+    import html as _html
+    msg = await update.message.reply_text("🔍 מתחבר ל-Gmail...")
+    d = email_reader.debug_invoice4u_emails()
+
+    if not d["connected"]:
+        await msg.edit_text(
+            f"❌ לא הצלחתי להתחבר ל-Gmail:\n{_html.escape(str(d['error']))}",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"✅ Gmail מחובר — נמצאו <b>{d['total_found']}</b> מיילים מ-invoice4u"]
+
+    if d["total_found"] == 0:
+        lines.append("\n⚠️ לא נמצאו מיילים מ-notifications@invoice4u.co.il")
+        lines.append("בדוק שהמיילים מגיעים לחשבון topazjudo@gmail.com")
+    else:
+        lines.append(f"\n📧 <b>מייל ראשון:</b>")
+        lines.append(f"תאריך: {_html.escape(str(d.get('first_date','?')))}")
+        lines.append(f"נושא: {_html.escape(str(d.get('first_subject','?')))}")
+        lines.append(f"\n<b>גוף המייל (800 תווים ראשונים):</b>")
+        lines.append(f"<pre>{_html.escape(str(d.get('first_body','?')))}</pre>")
+
+    await msg.edit_text("\n".join(lines), parse_mode="HTML")
+
+
 async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/payments — הפעל בדיקת מיילים עכשיו."""
     chat_id = update.effective_chat.id
@@ -6663,6 +6691,7 @@ def main():
     app.add_handler(CommandHandler("correction", correction_command))
     app.add_handler(CommandHandler("corrections", show_corrections_command))
     app.add_handler(CommandHandler("email", cmd_email))
+    app.add_handler(CommandHandler("email_debug", cmd_email_debug))
     app.add_handler(CommandHandler("payments", cmd_payments))
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("unpaid", cmd_unpaid))

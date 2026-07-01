@@ -117,65 +117,104 @@ def mark_skipped(email_id: str):
     mark_seen(email_id)
 
 
+def _imap_connect():
+    """Connect to Gmail IMAP and return imap object."""
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    imap.login(GMAIL_USER, GMAIL_APP_PASS)
+    return imap
+
+
+def _fetch_invoice4u_emails(imap, mailbox: str = "[Gmail]/All Mail") -> list[tuple[str, str, str]]:
+    """
+    Fetch all emails from invoice4u in mailbox.
+    Returns list of (msg_id, subject, body).
+    Searches only by FROM to avoid unreliable Hebrew IMAP SEARCH.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        imap.select(mailbox, readonly=True)
+    except Exception:
+        try:
+            imap.select("INBOX", readonly=True)
+            log.warning("Fell back to INBOX (could not open %s)", mailbox)
+        except Exception as e:
+            log.error("Could not select mailbox: %s", e)
+            return []
+
+    _, data = imap.search(None, 'FROM "notifications@invoice4u.co.il"')
+    msg_ids = data[0].split() if data[0] else []
+    log.info("invoice4u emails found in %s: %d", mailbox, len(msg_ids))
+
+    results = []
+    for mid in msg_ids:
+        try:
+            _, msg_data = imap.fetch(mid, "(RFC822)")
+            raw = msg_data[0][1]
+            msg = email_lib.message_from_bytes(raw)
+            subject = _decode_header(msg.get("Subject", ""))
+            body = _get_body(msg)
+            results.append((mid.decode(), subject, body, msg.get("Date", "")))
+        except Exception as e:
+            log.warning("Failed to fetch msg %s: %s", mid, e)
+            continue
+    return results
+
+
 def search_event_registrations(event_keyword: str) -> list[dict]:
     """
     חיפוש הרשמות לאירוע לפי מילת מפתח (למשל "לילה יפני" או "מחנה").
     מחזיר רשימת { name, phone, email, price, date, event_name }.
-    מחפש ב-invoice4u — מיילים מסוג "רכישת מוצר".
+    מחפש ב-[Gmail]/All Mail (כולל Promotions/Updates), מסנן בPython.
     """
+    import re
+    import logging
+    log = logging.getLogger(__name__)
+
     if not GMAIL_APP_PASS:
+        log.warning("search_event_registrations: GMAIL_APP_PASS not set")
         return []
 
-    import re
     results = []
     seen_names = set()
+    keyword_lower = event_keyword.strip().lower()
 
     try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com")
-        imap.login(GMAIL_USER, GMAIL_APP_PASS)
-        imap.select("INBOX")
+        imap = _imap_connect()
+        emails = _fetch_invoice4u_emails(imap)
 
-        # חיפוש מיילים מ-invoice4u עם נושא "רכישת מוצר"
-        _, data = imap.search(None, '(FROM "notifications@invoice4u.co.il" SUBJECT "רכישת מוצר")')
-        msg_ids = data[0].split() if data[0] else []
+        for mid, subject, body, date_str in emails:
+            # Filter by keyword in subject OR body
+            if keyword_lower not in body.lower() and keyword_lower not in subject.lower():
+                continue
 
-        keyword_lower = event_keyword.strip().lower()
-
-        for mid in msg_ids:
             try:
-                _, msg_data = imap.fetch(mid, "(RFC822)")
-                raw = msg_data[0][1]
-                msg = email_lib.message_from_bytes(raw)
-                body = _get_body(msg)
-
-                # סינון לפי מילת מפתח
-                if keyword_lower not in body.lower():
-                    continue
-
-                # חילוץ שם האירוע
-                event_match = re.search(r'שם עמוד המכירה\s*:\s*(.+?)(?:\n|שם הלקוח)', body, re.DOTALL)
+                # שם האירוע
+                event_match = re.search(r'שם עמוד המכירה\s*[:\-]\s*(.+?)[\n\r]', body)
+                if not event_match:
+                    event_match = re.search(r'שם המוצר\s*[:\-]\s*(.+?)[\n\r]', body)
                 event_name = event_match.group(1).strip() if event_match else event_keyword
 
-                # חילוץ שם הלקוח
-                name_match = re.search(r'שם הלקוח\s*:\s*(.+?)(?:\n|מייל)', body, re.DOTALL)
+                # שם הלקוח
+                name_match = re.search(r'שם הלקוח\s*[:\-]\s*(.+?)[\n\r]', body)
+                if not name_match:
+                    name_match = re.search(r'שם\s*[:\-]\s*(.+?)[\n\r]', body)
                 name = name_match.group(1).strip() if name_match else ""
 
-                # חילוץ טלפון
-                phone_match = re.search(r'טלפון הלקוח.*?:\s*(\d[\d\-]+)', body)
+                # טלפון
+                phone_match = re.search(r'טלפון(?:\s+הלקוח)?\s*[:\-]\s*([\d\-\+]+)', body)
                 phone = phone_match.group(1).strip() if phone_match else ""
 
-                # חילוץ מחיר
-                price_match = re.search(r'מחיר המוצר\s*:\s*([\d,.]+)', body)
+                # מחיר
+                price_match = re.search(r'(?:מחיר המוצר|סכום|מחיר)\s*[:\-]\s*([\d,\.]+)', body)
                 price = price_match.group(1).strip() if price_match else ""
 
-                # חילוץ מייל
-                email_match = re.search(r'מייל הלקוח\s*:\s*(\S+)', body)
+                # מייל
+                email_match = re.search(r'מייל(?:\s+הלקוח)?\s*[:\-]\s*(\S+@\S+)', body)
                 customer_email = email_match.group(1).strip() if email_match else ""
 
-                # מניעת כפילויות
                 if name and name not in seen_names:
                     seen_names.add(name)
-                    date_str = msg.get("Date", "")
                     results.append({
                         "name": name,
                         "phone": phone,
@@ -184,12 +223,43 @@ def search_event_registrations(event_keyword: str) -> list[dict]:
                         "date": date_str[:16],
                         "event_name": event_name,
                     })
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to parse invoice4u email %s: %s", mid, e)
                 continue
 
         imap.logout()
 
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("search_event_registrations error: %s", e)
 
+    log.info("search_event_registrations('%s'): found %d registrations", event_keyword, len(results))
     return sorted(results, key=lambda x: x["date"])
+
+
+def debug_invoice4u_emails() -> dict:
+    """
+    Diagnostic: connect to Gmail, count invoice4u emails, return raw body of first one.
+    Returns dict with keys: connected, mailbox, total_found, first_subject, first_body, error.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    if not GMAIL_APP_PASS:
+        return {"connected": False, "error": "GMAIL_APP_PASS לא מוגדר"}
+
+    try:
+        imap = _imap_connect()
+        emails = _fetch_invoice4u_emails(imap)
+        first = emails[0] if emails else None
+        imap.logout()
+        return {
+            "connected": True,
+            "total_found": len(emails),
+            "first_subject": first[1] if first else None,
+            "first_body": first[2][:800] if first else None,
+            "first_date": first[3] if first else None,
+            "error": None,
+        }
+    except Exception as e:
+        log.error("debug_invoice4u_emails: %s", e)
+        return {"connected": False, "error": str(e)}
