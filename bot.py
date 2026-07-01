@@ -4002,40 +4002,41 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cal_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/cal_test — בדיקת חיבור Google Calendar."""
+    import html as _html
+    from datetime import date as _date, timedelta as _td
     msg = await update.message.reply_text("🔍 בודק חיבור Google Calendar...")
-    from datetime import date as _date
     today = _date.today()
     lines = []
-    service = None
     try:
         service = cal._get_service()
         lines.append("✅ חיבור Google API — תקין")
     except Exception as e:
-        await msg.edit_text(f"❌ שגיאה ביצירת שירות Google:\n`{e}`", parse_mode="Markdown")
+        await msg.edit_text(
+            f"❌ שגיאה ביצירת שירות Google:\n{_html.escape(str(e))}",
+            parse_mode="HTML",
+        )
         return
 
     ok_count = 0
-    fail_lines = []
-    for cal_name, cal_id in list(cal.CALENDARS.items())[:5]:  # בדוק 5 ראשונים
+    for cal_name, cal_id in list(cal.CALENDARS.items())[:5]:
         try:
             result = service.events().list(
                 calendarId=cal_id,
                 timeMin=today.strftime("%Y-%m-%dT00:00:00+03:00"),
-                timeMax=(today + __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%dT00:00:00+03:00"),
+                timeMax=(today + _td(days=1)).strftime("%Y-%m-%dT00:00:00+03:00"),
                 singleEvents=True,
                 maxResults=1,
             ).execute()
             count = len(result.get("items", []))
-            lines.append(f"✅ {cal_name}: {count} אירועים")
+            lines.append(f"✅ {_html.escape(cal_name)}: {count} אירועים")
             ok_count += 1
         except Exception as e:
-            fail_lines.append(f"❌ {cal_name}: {e}")
+            lines.append(f"❌ {_html.escape(cal_name)}: {_html.escape(str(e)[:200])}")
 
-    lines.extend(fail_lines)
     if ok_count == 0:
-        lines.append("\n⚠️ *כל הבדיקות נכשלו — ייתכן שה-OAuth Token חסר הרשאת Calendar*")
-        lines.append("פתרון: הרץ `python3 auth_calendar.py` ועדכן את `GOOGLE_CREDS_B64` ב-Render")
-    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+        lines.append("\n<b>⚠️ כל הבדיקות נכשלו — ה-OAuth Token פג תוקף</b>")
+        lines.append("יש לחדש את ה-Token ולעדכן את GOOGLE_CREDS_B64 ב-Render")
+    await msg.edit_text("\n".join(lines), parse_mode="HTML")
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
