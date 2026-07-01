@@ -240,15 +240,8 @@ async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_da
     ss = {"step": "mg_pick_branch", "text": plan_text, "groups": []}
 
     if branch and plan_date:
-        # Both known — confirm directly
         ss["branch"] = branch
         ss["plan_date"] = plan_date.isoformat()
-        from training_plans import sheets_sessions as _  # not used, just typing note
-        import training_plans as _tp
-        sched_groups = ws.groups_for_branch_on_date(branch, plan_date)
-        group_names = ", ".join(g["name"] for g in sched_groups) if sched_groups else "לא ידוע"
-        from bot import sheets_sessions  # self-reference trick avoided — use global below
-        pass
 
     if branch and plan_date and ws.groups_for_branch_on_date(branch, plan_date):
         # Build preview of what will be written
