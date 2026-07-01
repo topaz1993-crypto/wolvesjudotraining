@@ -125,9 +125,9 @@ def _imap_connect(timeout: int = 20):
 
 def _fetch_invoice4u_emails(imap, mailbox: str = "[Gmail]/All Mail") -> list[tuple[str, str, str]]:
     """
-    Fetch all emails from invoice4u in mailbox.
-    Returns list of (msg_id, subject, body).
-    Searches only by FROM to avoid unreliable Hebrew IMAP SEARCH.
+    Fetch invoice4u emails since START_DATE from mailbox.
+    Returns list of (msg_id, subject, body, date).
+    Uses SINCE filter to avoid scanning all-time history (which times out).
     """
     import logging
     log = logging.getLogger(__name__)
@@ -141,9 +141,10 @@ def _fetch_invoice4u_emails(imap, mailbox: str = "[Gmail]/All Mail") -> list[tup
             log.error("Could not select mailbox: %s", e)
             return []
 
-    _, data = imap.search(None, 'FROM "notifications@invoice4u.co.il"')
+    # SINCE filter is critical — without it we scan ALL emails ever, which times out
+    _, data = imap.search(None, f'FROM "notifications@invoice4u.co.il" SINCE {START_DATE}')
     msg_ids = data[0].split() if data[0] else []
-    log.info("invoice4u emails found in %s: %d", mailbox, len(msg_ids))
+    log.info("invoice4u emails found in %s since %s: %d", mailbox, START_DATE, len(msg_ids))
 
     results = []
     for mid in msg_ids:
