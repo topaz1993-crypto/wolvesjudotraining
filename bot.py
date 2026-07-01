@@ -5055,10 +5055,12 @@ async def registration_sync_job(context):
 
 async def email_monitor_job(context):
     """Background job — runs every 10 min. Checks Gmail for new payment emails."""
+    import asyncio as _asyncio
     if not TOPAZ_CHAT_ID:
         return
 
-    emails = email_reader.fetch_new_emails()
+    # Run blocking IMAP call in thread pool to avoid blocking the event loop
+    emails = await _asyncio.to_thread(email_reader.fetch_new_emails)
     if not emails:
         return
 
@@ -5155,18 +5157,11 @@ async def email_monitor_job(context):
         email_reader.mark_seen(em["id"])
 
     # ── סנכרון הרשמות אירועים (לילה יפני / מחנה קיץ) ──
-    # Run once per job tick — compare invoice4u emails vs sheets, add/update silently
     try:
         event_updates = []
-        for keyword, sheet_type, label in [
-            ("לילה יפני", "lyla", "לילה יפני"),
-            ("מחנה",      "camp", "מחנה קיץ"),
-        ]:
-            lines = _sync_event_registrations(keyword, sheet_type)
-            new_adds = [l for l in lines if l.startswith("✅")]
-            new_pays = [l for l in lines if l.startswith("💰")]
-            if new_adds or new_pays:
-                event_updates.extend(new_adds + new_pays)
+        for keyword, sheet_type in [("לילה יפני", "lyla"), ("מחנה", "camp")]:
+            lines = await _asyncio.to_thread(_sync_event_registrations, keyword, sheet_type)
+            event_updates.extend(l for l in lines if l.startswith(("✅", "💰")))
 
         if event_updates and TOPAZ_CHAT_ID:
             await context.bot.send_message(
@@ -6602,11 +6597,12 @@ async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/add_missing — סנכרן הרשמות ותשלומים ממיילי invoice4u לגיליונות לילה יפני ומחנה קיץ."""
     msg = await update.message.reply_text("⏳ מחפש הרשמות חדשות במיילי invoice4u...")
 
+    import asyncio as _asyncio
     all_lines = []
 
     # ── לילה יפני ──
     await update.message.chat.send_action("typing")
-    lyla_lines = _sync_event_registrations("לילה יפני", "lyla")
+    lyla_lines = await _asyncio.to_thread(_sync_event_registrations, "לילה יפני", "lyla")
     if lyla_lines:
         all_lines.append("🎌 *לילה יפני:*")
         all_lines.extend(lyla_lines)
@@ -6614,7 +6610,7 @@ async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── מחנה קיץ ──
     await update.message.chat.send_action("typing")
-    camp_lines = _sync_event_registrations("מחנה", "camp")
+    camp_lines = await _asyncio.to_thread(_sync_event_registrations, "מחנה", "camp")
     if camp_lines:
         all_lines.append("🏕️ *מחנה קיץ:*")
         all_lines.extend(camp_lines)
