@@ -5126,6 +5126,29 @@ async def email_monitor_job(context):
         # Mark as seen so we don't process it again
         email_reader.mark_seen(em["id"])
 
+    # ── סנכרון הרשמות אירועים (לילה יפני / מחנה קיץ) ──
+    # Run once per job tick — compare invoice4u emails vs sheets, add/update silently
+    try:
+        event_updates = []
+        for keyword, sheet_type, label in [
+            ("לילה יפני", "lyla", "לילה יפני"),
+            ("מחנה",      "camp", "מחנה קיץ"),
+        ]:
+            lines = _sync_event_registrations(keyword, sheet_type)
+            new_adds = [l for l in lines if l.startswith("✅")]
+            new_pays = [l for l in lines if l.startswith("💰")]
+            if new_adds or new_pays:
+                event_updates.extend(new_adds + new_pays)
+
+        if event_updates and TOPAZ_CHAT_ID:
+            await context.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text="📋 *סנכרון אוטומטי — הרשמות/תשלומים:*\n\n" + "\n".join(event_updates),
+                parse_mode="Markdown",
+            )
+    except Exception as e:
+        log.warning("Event registration sync error: %s", e)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. תזכורת אימון יומית
@@ -6457,44 +6480,125 @@ async def wa_send_with_approval(
 
 
 
-async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/add_missing — מוסיף את הסטודנטים החסרים שזוהו ממיילי ההרשמה."""
-    await update.message.reply_text("⏳ מוסיף סטודנטים חסרים...")
-    results = []
+def _fuzzy_name_match(name: str, existing: set, cutoff: float = 0.82) -> str | None:
+    """Return the best match from existing for name, or None if below cutoff."""
+    from difflib import get_close_matches
+    matches = get_close_matches(name, existing, n=1, cutoff=cutoff)
+    return matches[0] if matches else None
 
-    # לילה יפני
-    lyla_to_add = [
-        ("יובל עשור", "ח", "חגור"),
-    ]
-    for name, grade, branch in lyla_to_add:
-        try:
-            added = lyla.add_student_direct(name, grade, branch)
-            results.append(f"{'✔' if added else '⚠ כבר קיים'} {name} — לילה יפני ({grade}, {branch})")
-        except Exception as e:
-            results.append(f"❌ {name} — שגיאה: {e}")
 
-    # מחנה קיץ
-    camp_to_add = [
-        ("איתן כהן",  "ח", "סירקין", "שבוע ראשון"),
-        ("עידו כהן",  "ג", "סירקין", "שבועיים"),
-        ("זיו אהרוני", "", "סירקין", "שבועיים"),
-    ]
+def _sync_event_registrations(keyword: str, sheet_type: str) -> list[str]:
+    """
+    Pull invoice4u registrations for keyword, compare with sheet, add/update missing.
+    sheet_type: 'lyla' or 'camp'
+    Returns list of result lines.
+    """
+    import email_reader as _er
+    lines = []
+
     try:
-        existing_camp = {s["name"] for s in camp.get_students()}
-    except Exception:
-        existing_camp = set()
+        registrations = _er.search_event_registrations(keyword)
+    except Exception as e:
+        return [f"❌ שגיאה בשליפת מיילים ({keyword}): {e}"]
 
-    for name, grade, branch, week in camp_to_add:
-        if name in existing_camp:
-            results.append(f"⚠ כבר קיים: {name} — מחנה קיץ")
-            continue
+    if not registrations:
+        return [f"📭 לא נמצאו הרשמות ל: {keyword}"]
+
+    if sheet_type == "lyla":
         try:
-            camp.add_student(name, grade, branch, week)
-            results.append(f"✔ {name} — מחנה קיץ ({grade or '?'}, {week})")
+            existing_list = lyla.get_students()
+            existing = {s["name"] for s in existing_list}
         except Exception as e:
-            results.append(f"❌ {name} — שגיאה: {e}")
+            return [f"❌ שגיאה בטעינת גיליון לילה יפני: {e}"]
 
-    await update.message.reply_text("\n".join(results) if results else "לא נמצא כלום להוסיף")
+        for reg in registrations:
+            name = reg["name"]
+            price = reg.get("price", "")
+            match = _fuzzy_name_match(name, existing)
+            if match:
+                # Already in sheet — update notes with paid info if price present
+                if price:
+                    try:
+                        lyla.update_student(match, "notes", f"שילם {price}₪")
+                        lines.append(f"💰 לילה יפני: {match} — עודכן תשלום {price}₪")
+                    except Exception:
+                        lines.append(f"⚠️ לילה יפני: {match} כבר קיים (לא עודכן)")
+                else:
+                    lines.append(f"⚠️ לילה יפני: {match} כבר קיים")
+            else:
+                try:
+                    lyla.add_student_direct(name)
+                    if price:
+                        lyla.update_student(name, "notes", f"שילם {price}₪")
+                    lines.append(f"✅ לילה יפני: {name} נוסף" + (f" | {price}₪" if price else ""))
+                    existing.add(name)
+                except Exception as e:
+                    lines.append(f"❌ לילה יפני: {name} — {e}")
+
+    elif sheet_type == "camp":
+        try:
+            existing_list = camp.get_students()
+            existing = {s["name"] for s in existing_list}
+            existing_paid = {s["name"]: s.get("paid", "") for s in existing_list}
+        except Exception as e:
+            return [f"❌ שגיאה בטעינת גיליון מחנה קיץ: {e}"]
+
+        for reg in registrations:
+            name = reg["name"]
+            price = reg.get("price", "")
+            match = _fuzzy_name_match(name, existing)
+            if match:
+                # Already in sheet — update paid if not already marked
+                if price and not existing_paid.get(match):
+                    try:
+                        camp.update_student(match, "paid", f"✅ {price}₪")
+                        lines.append(f"💰 מחנה קיץ: {match} — עודכן תשלום {price}₪")
+                    except Exception:
+                        lines.append(f"⚠️ מחנה קיץ: {match} כבר קיים (לא עודכן)")
+                else:
+                    lines.append(f"⚠️ מחנה קיץ: {match} כבר קיים")
+            else:
+                try:
+                    camp.add_student(name, "", "", "שבועיים")
+                    if price:
+                        camp.update_student(name, "paid", f"✅ {price}₪")
+                    lines.append(f"✅ מחנה קיץ: {name} נוסף" + (f" | {price}₪" if price else ""))
+                    existing.add(name)
+                except Exception as e:
+                    lines.append(f"❌ מחנה קיץ: {name} — {e}")
+
+    return lines
+
+
+async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/add_missing — סנכרן הרשמות ותשלומים ממיילי invoice4u לגיליונות לילה יפני ומחנה קיץ."""
+    msg = await update.message.reply_text("⏳ מחפש הרשמות חדשות במיילי invoice4u...")
+
+    all_lines = []
+
+    # ── לילה יפני ──
+    await update.message.chat.send_action("typing")
+    lyla_lines = _sync_event_registrations("לילה יפני", "lyla")
+    if lyla_lines:
+        all_lines.append("🎌 *לילה יפני:*")
+        all_lines.extend(lyla_lines)
+        all_lines.append("")
+
+    # ── מחנה קיץ ──
+    await update.message.chat.send_action("typing")
+    camp_lines = _sync_event_registrations("מחנה", "camp")
+    if camp_lines:
+        all_lines.append("🏕️ *מחנה קיץ:*")
+        all_lines.extend(camp_lines)
+
+    added   = sum(1 for l in all_lines if l.startswith("✅"))
+    updated = sum(1 for l in all_lines if l.startswith("💰"))
+    skipped = sum(1 for l in all_lines if l.startswith("⚠️"))
+
+    summary = f"📊 *סיכום:* נוספו {added} | עודכנו תשלומים {updated} | קיימים {skipped}"
+    text = summary + "\n\n" + "\n".join(all_lines) if all_lines else summary + "\n\nלא נמצאו הרשמות."
+
+    await msg.edit_text(text, parse_mode="Markdown")
 
 
 
