@@ -881,6 +881,11 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
         raise ValueError(f"סניף לא מוכר: {branch}")
     sheet_id = _get_sheet_id(service, tab_name)
 
+    # If the plan only labeled ONE group, spread its content to all other groups too.
+    # (Common case: פונקציונלי/נבחרת where all groups train the same program.)
+    groups_with_content = [items for _, items in sections if items]
+    fallback_items = groups_with_content[0] if len(groups_with_content) == 1 else []
+
     results = []
     saved_any = False
     for group_info, items in sections:
@@ -896,11 +901,12 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
                 results.append(f"⚠️ {group_name}: לא נכתב (בוטל) — {e}")
             continue
 
-        if not items:
+        effective_items = items if items else fallback_items
+        if not effective_items:
             results.append(f"⚠️ {group_name}: אין תוכן")
             continue
         try:
-            msg = save_plan_to_sheet(branch, group_name, plan_date, items)
+            save_plan_to_sheet(branch, group_name, plan_date, effective_items)
             results.append(f"✅ {group_name}")
             saved_any = True
         except ValueError as e:
