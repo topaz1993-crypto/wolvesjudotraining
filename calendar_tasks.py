@@ -7,10 +7,13 @@ import os
 import base64
 import pickle
 import warnings
+import logging
 from datetime import datetime, timedelta, date
 from pathlib import Path
 import json
 import re
+
+log = logging.getLogger(__name__)
 
 RECENT_EVENTS_FILE = Path("recent_calendar_events.json")
 
@@ -316,12 +319,18 @@ def get_events_range(date_from: date, date_to: date) -> list:
     """
     Fetch all events from all calendars between date_from and date_to (inclusive).
     Returns list of dicts sorted by datetime.
+    Raises RuntimeError if all calendars fail (auth/scope issue).
     """
     service = _get_service()
-    time_min = datetime.combine(date_from, datetime.min.time()).isoformat() + "Z"
-    time_max = datetime.combine(date_to + timedelta(days=1), datetime.min.time()).isoformat() + "Z"
+    # Use Israel local time (+03:00) not UTC
+    time_min = datetime.combine(date_from, datetime.min.time()).strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    time_max = datetime.combine(date_to + timedelta(days=1), datetime.min.time()).strftime("%Y-%m-%dT%H:%M:%S+03:00")
 
     all_events = []
+    failed = 0
+    first_error = None
+    seen_ids = set()
+
     for cal_name, cal_id in CALENDARS.items():
         try:
             result = service.events().list(
@@ -333,17 +342,19 @@ def get_events_range(date_from: date, date_to: date) -> list:
                 maxResults=50,
             ).execute()
             for ev in result.get("items", []):
+                ev_id = ev.get("id", "")
+                if ev_id and ev_id in seen_ids:
+                    continue
+                if ev_id:
+                    seen_ids.add(ev_id)
                 start = ev.get("start", {})
                 start_str = start.get("dateTime") or start.get("date", "")
-                # Parse to sortable
                 try:
                     if "T" in start_str:
-                        # Parse with timezone awareness and convert to Israel time (UTC+3)
                         if start_str.endswith("Z"):
                             dt_utc = datetime.fromisoformat(start_str[:19])
                             dt = dt_utc + timedelta(hours=3)
                         elif "+" in start_str[10:] or (len(start_str) > 19 and start_str[19] == "-"):
-                            # Has offset like +03:00 or -05:00 — parse offset manually
                             naive = datetime.fromisoformat(start_str[:19])
                             offset_str = start_str[19:]
                             sign = 1 if offset_str[0] == "+" else -1
@@ -351,7 +362,7 @@ def get_events_range(date_from: date, date_to: date) -> list:
                             offset_h = int(parts[0]) if parts else 0
                             offset_m = int(parts[1]) if len(parts) > 1 else 0
                             utc = naive - timedelta(hours=sign * offset_h, minutes=sign * offset_m)
-                            dt = utc + timedelta(hours=3)  # to Israel
+                            dt = utc + timedelta(hours=3)
                         else:
                             dt = datetime.fromisoformat(start_str[:19])
                         time_display = dt.strftime("%H:%M")
@@ -376,8 +387,15 @@ def get_events_range(date_from: date, date_to: date) -> list:
                     "sort_key": sort_key,
                     "description": ev.get("description", ""),
                 })
-        except Exception:
+        except Exception as e:
+            log.warning("Calendar '%s' fetch error: %s", cal_name, e)
+            failed += 1
+            if first_error is None:
+                first_error = str(e)
             continue
+
+    if failed == len(CALENDARS) and first_error:
+        raise RuntimeError(f"כל יומני Google Calendar נכשלו. שגיאה: {first_error}")
 
     all_events.sort(key=lambda x: x["sort_key"])
     return all_events

@@ -3977,6 +3977,44 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _calendar_query(update, context, "החודש")
 
 
+async def cal_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cal_test — בדיקת חיבור Google Calendar."""
+    msg = await update.message.reply_text("🔍 בודק חיבור Google Calendar...")
+    from datetime import date as _date
+    today = _date.today()
+    lines = []
+    service = None
+    try:
+        service = cal._get_service()
+        lines.append("✅ חיבור Google API — תקין")
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה ביצירת שירות Google:\n`{e}`", parse_mode="Markdown")
+        return
+
+    ok_count = 0
+    fail_lines = []
+    for cal_name, cal_id in list(cal.CALENDARS.items())[:5]:  # בדוק 5 ראשונים
+        try:
+            result = service.events().list(
+                calendarId=cal_id,
+                timeMin=today.strftime("%Y-%m-%dT00:00:00+03:00"),
+                timeMax=(today + __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%dT00:00:00+03:00"),
+                singleEvents=True,
+                maxResults=1,
+            ).execute()
+            count = len(result.get("items", []))
+            lines.append(f"✅ {cal_name}: {count} אירועים")
+            ok_count += 1
+        except Exception as e:
+            fail_lines.append(f"❌ {cal_name}: {e}")
+
+    lines.extend(fail_lines)
+    if ok_count == 0:
+        lines.append("\n⚠️ *כל הבדיקות נכשלו — ייתכן שה-OAuth Token חסר הרשאת Calendar*")
+        lines.append("פתרון: הרץ `python3 auth_calendar.py` ועדכן את `GOOGLE_CREDS_B64` ב-Render")
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/stats — סטטיסטיקה מהירה על המועדון."""
     msg = await update.message.reply_text("📊 טוען נתונים...")
@@ -6493,6 +6531,7 @@ def main():
     app.add_handler(CommandHandler("tomorrow", tomorrow_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("month", month_command))
+    app.add_handler(CommandHandler("cal_test", cal_test_command))
     app.add_handler(CommandHandler("correction", correction_command))
     app.add_handler(CommandHandler("corrections", show_corrections_command))
     app.add_handler(CommandHandler("email", cmd_email))
