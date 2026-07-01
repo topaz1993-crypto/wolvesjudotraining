@@ -69,8 +69,7 @@ def fetch_new_emails() -> list[dict]:
     results = []
 
     try:
-        imap = imaplib.IMAP4_SSL("imap.gmail.com")
-        imap.login(GMAIL_USER, GMAIL_APP_PASS)
+        imap = _imap_connect()
         imap.select("INBOX")
 
         _, data = imap.search(None, f'(SINCE {START_DATE})')
@@ -117,9 +116,9 @@ def mark_skipped(email_id: str):
     mark_seen(email_id)
 
 
-def _imap_connect():
-    """Connect to Gmail IMAP and return imap object."""
-    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+def _imap_connect(timeout: int = 20):
+    """Connect to Gmail IMAP and return imap object. Raises on timeout/auth error."""
+    imap = imaplib.IMAP4_SSL("imap.gmail.com", timeout=timeout)
     imap.login(GMAIL_USER, GMAIL_APP_PASS)
     return imap
 

@@ -6595,25 +6595,29 @@ def _sync_event_registrations(keyword: str, sheet_type: str) -> list[str]:
 
 async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/add_missing — סנכרן הרשמות ותשלומים ממיילי invoice4u לגיליונות לילה יפני ומחנה קיץ."""
-    msg = await update.message.reply_text("⏳ מחפש הרשמות חדשות במיילי invoice4u...")
-
     import asyncio as _asyncio
+    msg = await update.message.reply_text("⏳ מחפש הרשמות חדשות במיילי invoice4u...")
     all_lines = []
 
-    # ── לילה יפני ──
-    await update.message.chat.send_action("typing")
-    lyla_lines = await _asyncio.to_thread(_sync_event_registrations, "לילה יפני", "lyla")
-    if lyla_lines:
-        all_lines.append("🎌 *לילה יפני:*")
-        all_lines.extend(lyla_lines)
-        all_lines.append("")
+    for emoji, label, keyword, sheet_type in [
+        ("🎌", "לילה יפני", "לילה יפני", "lyla"),
+        ("🏕️", "מחנה קיץ",  "מחנה",      "camp"),
+    ]:
+        await update.message.chat.send_action("typing")
+        try:
+            lines = await _asyncio.wait_for(
+                _asyncio.to_thread(_sync_event_registrations, keyword, sheet_type),
+                timeout=45,
+            )
+        except _asyncio.TimeoutError:
+            lines = [f"⏰ פג זמן בחיבור ל-Gmail ({label}) — נסה שוב מאוחר יותר"]
+        except Exception as e:
+            lines = [f"❌ שגיאה ({label}): {e}"]
 
-    # ── מחנה קיץ ──
-    await update.message.chat.send_action("typing")
-    camp_lines = await _asyncio.to_thread(_sync_event_registrations, "מחנה", "camp")
-    if camp_lines:
-        all_lines.append("🏕️ *מחנה קיץ:*")
-        all_lines.extend(camp_lines)
+        if lines:
+            all_lines.append(f"{emoji} *{label}:*")
+            all_lines.extend(lines)
+            all_lines.append("")
 
     added   = sum(1 for l in all_lines if l.startswith("✅"))
     updated = sum(1 for l in all_lines if l.startswith("💰"))
@@ -6621,7 +6625,6 @@ async def cmd_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     summary = f"📊 *סיכום:* נוספו {added} | עודכנו תשלומים {updated} | קיימים {skipped}"
     text = summary + "\n\n" + "\n".join(all_lines) if all_lines else summary + "\n\nלא נמצאו הרשמות."
-
     await msg.edit_text(text, parse_mode="Markdown")
 
 
