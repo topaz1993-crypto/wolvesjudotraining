@@ -628,8 +628,8 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     if not all_group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
-    # Include the header row — col B has the group name but the date column also holds חימום
-    content_rows = all_group_rows
+    # Skip the group header row (grp_rows[0]) — content starts at grp_rows[1:]
+    content_rows = all_group_rows[1:]
     if not content_rows:
         raise ValueError(f"אין שורות תוכן לקבוצה '{group}'")
 
@@ -804,7 +804,7 @@ def preview_plan(branch: str, plan_date, plan_text: str) -> list[dict]:
                 svc = _get_service()
                 rows = _read_tab(svc, tab_name)
                 grp_rows = _find_group_rows_for_group(rows, group_info["name"])
-                n_rows = len(grp_rows) if grp_rows else None
+                n_rows = len(grp_rows) - 1 if grp_rows else None  # exclude group header row
             except Exception:
                 pass
         if n_rows is None:
@@ -836,11 +836,13 @@ def verify_plan_saved(branch: str, plan_date, preview: list[dict]) -> list[dict]
         verify_results = []
         for g in preview:
             grp_rows = _find_group_rows_for_group(rows, g["group"])
-            n_rows = len(grp_rows) if grp_rows else 0
+            # Skip the group header row — content is in grp_rows[1:]
+            content_grp_rows = grp_rows[1:] if grp_rows else []
+            n_rows = len(content_grp_rows)
             row_types = ROW_TYPES[:n_rows]
             written = []
             for i, rt in enumerate(row_types):
-                row_idx = grp_rows[i] if i < len(grp_rows) else -1
+                row_idx = content_grp_rows[i] if i < len(content_grp_rows) else -1
                 val = ""
                 if row_idx >= 0 and row_idx < len(rows):
                     row = rows[row_idx]
