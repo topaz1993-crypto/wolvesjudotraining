@@ -123,11 +123,15 @@ def _imap_connect(timeout: int = 20):
     return imap
 
 
-def _fetch_all_emails_since(imap, mailbox: str = "[Gmail]/All Mail") -> list[tuple[str, str, str]]:
+_HEADER_BATCH = 50
+
+
+def _fetch_all_emails_since(imap, mailbox: str = "[Gmail]/All Mail", keywords: list = None) -> list:
     """
-    Fetch ALL emails since START_DATE from mailbox (no FROM filter).
+    Two-stage fetch: headers in batches for all emails, full body only for keyword matches.
+    Stage 1: batch-fetch subjects (50 at a time) — fast even for 1000+ emails.
+    Stage 2: fetch RFC822 only for emails whose subject contains a keyword.
     Returns list of (msg_id, subject, body, date).
-    Keyword filtering happens in the caller (Python-level), not here.
     """
     import logging
     log = logging.getLogger(__name__)
@@ -141,23 +145,50 @@ def _fetch_all_emails_since(imap, mailbox: str = "[Gmail]/All Mail") -> list[tup
             log.error("Could not select mailbox: %s", e)
             return []
 
-    # No FROM filter — we search all senders, filter by keyword in Python
-    _, data = imap.search(None, f'SINCE {START_DATE}')
+    _, data = imap.search(None, f"SINCE {START_DATE}")
     msg_ids = data[0].split() if data[0] else []
     log.info("All emails in %s since %s: %d", mailbox, START_DATE, len(msg_ids))
+    if not msg_ids:
+        return []
 
-    results = []
-    for mid in msg_ids:
+    keywords_lower = [k.lower() for k in (keywords or [])]
+    candidates = []  # list of (mid_bytes, subject, date)
+
+    # Stage 1: batch-fetch headers only — far fewer bytes than full RFC822
+    for i in range(0, len(msg_ids), _HEADER_BATCH):
+        chunk = msg_ids[i : i + _HEADER_BATCH]
+        id_str = b",".join(chunk)
         try:
-            _, msg_data = imap.fetch(mid, "(RFC822)")
+            _, hdr_data = imap.fetch(id_str, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])")
+        except Exception as e:
+            log.warning("Header batch %d failed: %s", i, e)
+            continue
+        for item in hdr_data:
+            if not isinstance(item, tuple):
+                continue
+            try:
+                mid_str = item[0].decode().split()[0]
+                parsed = email_lib.message_from_bytes(item[1])
+                subj = _decode_header(parsed.get("Subject", ""))
+                date_str = parsed.get("Date", "")
+                if not keywords_lower or any(k in subj.lower() for k in keywords_lower):
+                    candidates.append((mid_str.encode(), subj, date_str))
+            except Exception:
+                pass
+
+    log.info("Candidates after subject filter: %d", len(candidates))
+
+    # Stage 2: fetch full body only for candidates
+    results = []
+    for mid_bytes, subj, date_str in candidates:
+        try:
+            _, msg_data = imap.fetch(mid_bytes, "(RFC822)")
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
-            subject = _decode_header(msg.get("Subject", ""))
             body = _get_body(msg)
-            results.append((mid.decode(), subject, body, msg.get("Date", "")))
+            results.append((mid_bytes.decode(), subj, body, date_str))
         except Exception as e:
-            log.warning("Failed to fetch msg %s: %s", mid, e)
-            continue
+            log.warning("Failed to fetch body for %s: %s", mid_bytes, e)
     return results
 
 
@@ -181,10 +212,10 @@ def search_event_registrations(event_keyword: str) -> list[dict]:
 
     try:
         imap = _imap_connect()
-        emails = _fetch_all_emails_since(imap)
+        emails = _fetch_all_emails_since(imap, keywords=[event_keyword])
 
         for mid, subject, body, date_str in emails:
-            # Filter by keyword in subject OR body
+            # Body-level keyword check (subject was already pre-filtered)
             if keyword_lower not in body.lower() and keyword_lower not in subject.lower():
                 continue
 

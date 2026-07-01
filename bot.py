@@ -1941,7 +1941,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.message.chat.send_action("typing")
         try:
-            msgs = email_reader.fetch_new_emails()
+            msgs = await asyncio.to_thread(email_reader.fetch_new_emails)
             if msgs:
                 await query.message.reply_text(
                     f"📧 *נמצאו {len(msgs)} מיילי תשלום*",
@@ -3324,7 +3324,7 @@ async def cmd_email_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/email_debug — אבחון חיבור Gmail ומיילי invoice4u."""
     import html as _html
     msg = await update.message.reply_text("🔍 מתחבר ל-Gmail...")
-    d = email_reader.debug_invoice4u_emails()
+    d = await asyncio.to_thread(email_reader.debug_invoice4u_emails)
 
     if not d["connected"]:
         await msg.edit_text(
@@ -3354,7 +3354,7 @@ async def cmd_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 בודק מיילים חדשים...")
     await update.message.chat.send_action("typing")
     try:
-        emails = email_reader.fetch_new_emails()
+        emails = await asyncio.to_thread(email_reader.fetch_new_emails)
         if not emails:
             await update.message.reply_text("✅ אין מיילים חדשים לבדיקה.")
             return
