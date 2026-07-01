@@ -121,7 +121,7 @@ def _get_service():
     # Support both local pickle and base64 env var (for Render)
     b64 = os.environ.get("GOOGLE_CREDS_B64")
     if b64:
-        creds = pickle.loads(base64.b64decode(b64))
+        creds = pickle.loads(base64.b64decode(b64 + "=="))
     else:
         pickle_path = os.path.expanduser("~/.wolves_judo_token.pickle")
         with open(pickle_path, "rb") as f:

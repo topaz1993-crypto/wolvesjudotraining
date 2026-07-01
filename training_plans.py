@@ -70,7 +70,7 @@ _LAST_CELL  = _FUTURE_CELL
 def _get_service():
     b64 = os.environ.get("GOOGLE_CREDS_B64")
     if b64:
-        creds = pickle.loads(base64.b64decode(b64))
+        creds = pickle.loads(base64.b64decode(b64 + "=="))
     else:
         with open(os.path.expanduser("~/.wolves_judo_token.pickle"), "rb") as f:
             creds = pickle.load(f)
