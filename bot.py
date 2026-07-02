@@ -345,16 +345,35 @@ async def call_claude(user_id: str, user_content: str, image_b64=None) -> str:
         content = user_content
         append_history(user_id, "user", user_content)
 
-    msgs = get_history(user_id)[:-1] if image_b64 else get_history(user_id)
+    # Build clean message list: filter consecutive same-role messages, must start with user
+    raw_msgs = get_history(user_id)[:-1] if image_b64 else get_history(user_id)
+    clean: list = []
+    for m in raw_msgs:
+        if clean and clean[-1]["role"] == m["role"]:
+            clean[-1] = m  # keep only the latest of consecutive same-role
+        else:
+            clean.append(m)
+    if clean and clean[0]["role"] == "assistant":
+        clean = clean[1:]  # drop leading assistant message
     if image_b64:
-        msgs = get_history(user_id)[:-1] + [{"role": "user", "content": content}]
+        msgs = clean[:-1] + [{"role": "user", "content": content}]
+    else:
+        msgs = clean
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=build_system_prompt(),
-        messages=msgs,
-    )
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=build_system_prompt(),
+            messages=msgs,
+        )
+    except Exception:
+        # Rollback the user message we added — prevent corrupted history
+        hist = get_history(user_id)
+        if hist and hist[-1]["role"] == "user":
+            hist.pop()
+        save_json(HISTORY_FILE, history)
+        raise
     reply = response.content[0].text
     append_history(user_id, "assistant", reply)
     return reply
@@ -4335,6 +4354,20 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return True
 
     # ── Multi-group plan — manual date input ─────────────────────────────────────
+    if step == "mg_pick_branch":
+        _plan_kw = ("חימום", "תרגול", "קרבות", "רנדורי", "משחק", "כוח")
+        if sum(1 for k in _plan_kw if k in text) >= 1:
+            # User resent plan text instead of clicking branch button — re-process as new plan
+            sheets_sessions.pop(user_id, None)
+            _new_branch, _new_date = tp.detect_branch_and_date(text)
+            pending_plans[user_id] = {"reply": text, "original": text,
+                                       "branch": _new_branch or "", "plan_date": _new_date.isoformat() if _new_date else ""}
+            save_json(PENDING_FILE, pending_plans)
+            await _plan_offer_save(update, user_id, text, _new_branch, _new_date)
+        else:
+            await update.message.reply_text("בחר סניף מהכפתורים למעלה, או שלח /ביטול.")
+        return True
+
     if step == "mg_pick_date":
         from datetime import date as _date
         import re as _re
