@@ -615,14 +615,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if is_plan_text:
         branch, plan_date = tp.detect_branch_and_date(user_text)
-        # If branch/date not in this message, reuse from previous pending plan
-        if (not branch or not plan_date):
+        # If neither branch nor date in text, reuse from previous pending plan
+        # (only reuse date if branch also comes from pending — avoids wrong-date cross-branch)
+        if not branch and not plan_date:
             _pd = pending_plans.get(user_id)
             if isinstance(_pd, dict) and _pd.get("branch") and _pd.get("plan_date"):
                 from datetime import date as _dt_cls
-                branch = branch or _pd["branch"]
-                if not plan_date and _pd["plan_date"]:
-                    plan_date = _dt_cls.fromisoformat(_pd["plan_date"])
+                branch = _pd["branch"]
+                plan_date = _dt_cls.fromisoformat(_pd["plan_date"])
         pending_plans[user_id] = {"reply": user_text, "original": user_text,
                                    "branch": branch or "", "plan_date": plan_date.isoformat() if plan_date else ""}
         save_json(PENDING_FILE, pending_plans)
@@ -4353,8 +4353,9 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception as e:
                 await update.message.reply_text(f"❌ שגיאה: {e}")
         elif sum(1 for k in _plan_kw if k in text) >= 1 and ss.get("plan_date"):
-            # User sent updated plan text instead of a date — re-parse with existing branch+date
-            branch = ss.get("branch", "")
+            # User sent updated plan text instead of a date — re-detect branch from new text
+            _new_branch, _ = tp.detect_branch_and_date(text)
+            branch = _new_branch or ss.get("branch", "")
             plan_date = _date.fromisoformat(ss["plan_date"])
             sheets_sessions.pop(user_id, None)
             pending_plans[user_id] = {"reply": text, "original": text,
