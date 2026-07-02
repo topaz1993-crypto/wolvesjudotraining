@@ -799,8 +799,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         reply = await call_claude(user_id, full_content)
     except Exception as e:
-        log.error("Claude API error: %s", e)
-        await update.message.reply_text("❌ שגיאה בתקשורת עם Claude. נסה שוב.")
+        err_type = type(e).__name__
+        log.error("Claude API error [%s]: %s", err_type, e)
+        await update.message.reply_text(
+            f"❌ שגיאה בתקשורת עם Claude [{err_type}]: {str(e)[:120]}\n\nנסה שוב, או שלח /clear_history לאיפוס שיחה."
+        )
         return
 
     # Log conversation for Cowork sync
@@ -4085,15 +4088,24 @@ async def cal_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 maxResults=1,
             ).execute()
             count = len(result.get("items", []))
-            lines.append(f"✅ {_html.escape(cal_name)}: {count} אירועים")
+            lines.append(f"✅ {cal_name}: {count} אירועים")
             ok_count += 1
         except Exception as e:
-            lines.append(f"❌ {_html.escape(cal_name)}: {_html.escape(str(e)[:200])}")
+            lines.append(f"❌ {cal_name}: {str(e)[:200]}")
 
     if ok_count == 0:
-        lines.append("\n<b>⚠️ כל הבדיקות נכשלו — ה-OAuth Token פג תוקף</b>")
+        lines.append("\n⚠️ כל הבדיקות נכשלו — ה-OAuth Token פג תוקף")
         lines.append("יש לחדש את ה-Token ולעדכן את GOOGLE_CREDS_B64 ב-Render")
-    await msg.edit_text("\n".join(lines), parse_mode="HTML")
+    await msg.edit_text("\n".join(lines))
+
+
+async def clear_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/clear_history — מוחק את היסטוריית השיחה עם Claude."""
+    user_id = str(update.effective_user.id)
+    count = len(history.get(user_id, []))
+    history.pop(user_id, None)
+    save_json(HISTORY_FILE, history)
+    await update.message.reply_text(f"🗑 היסטוריית שיחה נמחקה ({count} הודעות). Claude מתחיל שיחה חדשה.")
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6741,6 +6753,7 @@ def main():
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CommandHandler("cal_test", cal_test_command))
+    app.add_handler(CommandHandler("clear_history", clear_history_command))
     app.add_handler(CommandHandler("correction", correction_command))
     app.add_handler(CommandHandler("corrections", show_corrections_command))
     app.add_handler(CommandHandler("email", cmd_email))
