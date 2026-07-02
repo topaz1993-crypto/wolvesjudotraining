@@ -607,7 +607,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if is_plan_text:
         branch, plan_date = tp.detect_branch_and_date(user_text)
-        pending_plans[user_id] = {"reply": user_text, "original": user_text}
+        # If branch/date not in this message, reuse from previous pending plan
+        if (not branch or not plan_date):
+            _pd = pending_plans.get(user_id)
+            if isinstance(_pd, dict) and _pd.get("branch") and _pd.get("plan_date"):
+                from datetime import date as _dt_cls
+                branch = branch or _pd["branch"]
+                if not plan_date and _pd["plan_date"]:
+                    plan_date = _dt_cls.fromisoformat(_pd["plan_date"])
+        pending_plans[user_id] = {"reply": user_text, "original": user_text,
+                                   "branch": branch or "", "plan_date": plan_date.isoformat() if plan_date else ""}
         save_json(PENDING_FILE, pending_plans)
         await _plan_offer_save(update, user_id, user_text, branch, plan_date)
         return
@@ -4322,6 +4331,7 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         from datetime import date as _date
         import re as _re
         d_match = _re.search(r'(\d{1,2})[/.](\d{1,2})', text)
+        _plan_kw = ("חימום", "תרגול", "קרבות", "רנדורי", "משחק", "כוח")
         if d_match:
             day, month = int(d_match.group(1)), int(d_match.group(2))
             try:
@@ -4334,6 +4344,15 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(f"✅ *נשמר!*\n\n{result}", parse_mode="Markdown")
             except Exception as e:
                 await update.message.reply_text(f"❌ שגיאה: {e}")
+        elif sum(1 for k in _plan_kw if k in text) >= 1 and ss.get("plan_date"):
+            # User sent updated plan text instead of a date — re-parse with existing branch+date
+            branch = ss.get("branch", "")
+            plan_date = _date.fromisoformat(ss["plan_date"])
+            sheets_sessions.pop(user_id, None)
+            pending_plans[user_id] = {"reply": text, "original": text,
+                                       "branch": branch, "plan_date": ss["plan_date"]}
+            save_json(PENDING_FILE, pending_plans)
+            await _plan_offer_save(update, user_id, text, branch, plan_date)
         else:
             await update.message.reply_text("שלח תאריך בפורמט: 27/6")
         return True
