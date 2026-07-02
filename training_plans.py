@@ -502,11 +502,20 @@ def _norm_group(s: str) -> str:
 
 
 def _group_matches(keyword: str, cell: str) -> bool:
-    """Match group name precisely: exact first; substring only if both >= 3 chars."""
+    """Match group name: exact; substring if both >=3 chars;
+    first-token prefix for 'גנ חובה'↔'גנימ-חמישי' (גן חובה ↔ גנים - חמישי)."""
     if keyword == cell:
         return True
     if len(keyword) >= 3 and len(cell) >= 3:
-        return keyword in cell or cell in keyword
+        if keyword in cell or cell in keyword:
+            return True
+    import re as _re
+    def _first(s):
+        return _re.split(r'[\s\-]+', s.strip())[0]
+    fk, fc = _first(keyword), _first(cell)
+    if len(fk) >= 2 and len(fc) >= 2:
+        if fk == fc or fk.startswith(fc) or fc.startswith(fk):
+            return True
     return False
 
 
