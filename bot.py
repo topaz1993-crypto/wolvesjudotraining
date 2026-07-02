@@ -576,8 +576,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── אישור / שמירה מחדש — מ-pending_plans ────────────────────────────────────
     SAVE_TRIGGERS = ("לא שמר", "לא נשמר", "תשמור", "שמור עכשיו", "לשמור", "שמור את זה",
-                     "מאשר", "אשר", "כן שמור", "שמור", "סבבה")
+                     "מאשר", "אשר", "כן שמור", "שמור", "סבבה",
+                     "לשמור בגיליון", "לשמור לגיליון", "האם תוכל לשמור", "תוכל לשמור",
+                     "האם אתה יכול לשמור", "שמור בגיליון")
     _plan_data = pending_plans.get(user_id)
+    if any(t in user_text for t in SAVE_TRIGGERS):
+        if not _plan_data:
+            await update.message.reply_text(
+                "💾 שמח לשמור! שלח לי תחילה את תוכנית האימון ואציג תצוגה מקדימה + כפתור שמירה."
+            )
+            return
     if any(t in user_text for t in SAVE_TRIGGERS) and _plan_data:
         plan_data = _plan_data
         plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
@@ -795,8 +803,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          "Bench", "Pull-up", "Rope Climb", "Box Jump")
         # זיהוי מחמיר: חייב מבנה מסודר עם נקודותיים (חימום: / תרגול:) — לא רק מילות מפתח
         PLAN_STRUCTURE = ("חימום:", "תרגול:", "קרבות:", "משחק:", "כוח:", "רנדורי:")
-        NEGATIVE_SIGNALS = ("באג", "צריך לתקן", "שגיאה בקוד", "הפונקציה", "לשמור לגיליון?",
-                            "תיקון", "הבוט כתב", "במקום להציג", "ארגומנטים")
+        NEGATIVE_SIGNALS = ("צריך לתקן", "שגיאה בקוד", "הפונקציה", "לשמור לגיליון?",
+                            "הבוט כתב", "במקום להציג", "ארגומנטים")
         has_structure = sum(1 for k in PLAN_STRUCTURE if k in reply) >= 2
         has_negative  = any(n in reply for n in NEGATIVE_SIGNALS)
         is_training_plan = has_structure and not has_negative
