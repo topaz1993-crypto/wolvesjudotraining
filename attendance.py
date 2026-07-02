@@ -54,6 +54,8 @@ _SHEET_TAB_ALIASES: dict[tuple[str, str], str] = {
     ("1_J1H0q4-RGy9rH0wyhwfv-47K-uKxiHtbI-D2RoVVOU", "ג-ו"): "ג-ז",
     # אהרונוביץ: tab is named "ג-ו" (grades 3-6) but bot uses "א-ה"
     ("1MAN8_OnQRBeiznYMvGa57GHU-xz-MErgFkkNOV_Ms8E", "א-ה"): "ג-ו",
+    # סירקין: WEEKLY_SCHEDULE uses "גן חובה" but attendance sheet tab is "גנים"
+    ("1L0mcnpBPW4_3nsxaMy3EunQuOHPjWejvL1Wb6SGzltQ", "גן חובה"): "גנים",
 }
 
 
