@@ -490,7 +490,15 @@ def _find_or_create_date_col(service, tab_name: str, plan_date) -> int:
 
 
 def _norm_group(s: str) -> str:
-    return s.strip().replace("–", "-").replace("—", "-").replace("–", "-").replace("—", "-")
+    import re as _re
+    s = s.strip()
+    s = s.replace("–", "-").replace("—", "-").replace("–", "-").replace("—", "-")
+    s = s.replace('"', "").replace("״", "").replace("'", "").replace("׳", "")
+    s = _re.sub(r'\s*-\s*', '-', s)  # normalize spaces around dashes: "ז- בוגרים" → "ז-בוגרים"
+    # Normalize Hebrew final-form letters to non-final for comparison (ן→נ, ם→מ, ף→פ, ך→כ, ץ→צ)
+    # Enables "גנים" to match "גן חובה" (both start with גנ after normalization)
+    s = s.translate(str.maketrans("ןםףךץ", "נמפכצ"))
+    return s
 
 
 def _group_matches(keyword: str, cell: str) -> bool:
@@ -605,6 +613,12 @@ def smart_map_items(items: list[str], n_rows: int, branch: str = "") -> list[str
         if not result[rt_idx] and remaining:
             result[rt_idx] = remaining.pop(0)
 
+    # Fourth pass: overflow — append remaining items to last row so nothing is lost
+    if remaining and n_rows > 0:
+        last_idx = n_rows - 1
+        overflow = "\n".join(remaining)
+        result[last_idx] = (result[last_idx] + "\n" + overflow).strip() if result[last_idx] else overflow
+
     return result
 
 
@@ -628,10 +642,7 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     if not all_group_rows:
         raise ValueError(f"קבוצה '{group}' לא נמצאה בלשונית {tab_name}")
 
-    # Skip the group header row (grp_rows[0]) — content starts at grp_rows[1:]
-    content_rows = all_group_rows[1:]
-    if not content_rows:
-        raise ValueError(f"אין שורות תוכן לקבוצה '{group}'")
+    content_rows = all_group_rows
 
     mapped = smart_map_items(plan_items, len(content_rows), branch=branch)
 
@@ -766,6 +777,26 @@ def detect_branch_and_date(text: str):
             branch = b
             break
 
+    # Infer branch from group names if no explicit branch name found
+    if not branch:
+        import weekly_schedule as _ws
+        from collections import Counter
+        branch_counter: Counter = Counter()
+        for day_scheds in _ws.SCHEDULE.values():
+            for sched in day_scheds:
+                b = sched["branch"]
+                for g in sched["groups"]:
+                    gn = g["name"]
+                    # Match group name appearing as standalone line (with optional "כיתות" prefix)
+                    if re.search(
+                        r'(?m)^(?:כיתות?\s+)?' + re.escape(gn) + r'\s*$', text
+                    ):
+                        branch_counter[b] += 1
+        if branch_counter:
+            top_branch, top_count = branch_counter.most_common(1)[0]
+            if top_count >= 2:
+                branch = top_branch
+
     # Detect date — DD/MM or relative words
     plan_date = None
     today = date.today()
@@ -804,7 +835,7 @@ def preview_plan(branch: str, plan_date, plan_text: str) -> list[dict]:
                 svc = _get_service()
                 rows = _read_tab(svc, tab_name)
                 grp_rows = _find_group_rows_for_group(rows, group_info["name"])
-                n_rows = len(grp_rows) - 1 if grp_rows else None  # exclude group header row
+                n_rows = len(grp_rows) if grp_rows else None
             except Exception:
                 pass
         if n_rows is None:
@@ -836,8 +867,7 @@ def verify_plan_saved(branch: str, plan_date, preview: list[dict]) -> list[dict]
         verify_results = []
         for g in preview:
             grp_rows = _find_group_rows_for_group(rows, g["group"])
-            # Skip the group header row — content is in grp_rows[1:]
-            content_grp_rows = grp_rows[1:] if grp_rows else []
+            content_grp_rows = grp_rows if grp_rows else []
             n_rows = len(content_grp_rows)
             row_types = ROW_TYPES[:n_rows]
             written = []
@@ -1156,6 +1186,53 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
                 result.append((sched_groups[idx], items))
         for i, sg in enumerate(sched_groups):
             if i not in used:
+                result.append((sg, []))
+        return result
+
+    # ── Format 5: plain group-name header line (no colon, no emoji) ──
+    # User writes: "כיתות ד-ו\nחימום...", "ז-בוגרים\nתרגול...", "גנים\nאין אימון"
+    def _is_group_line(ln: str) -> int:
+        """Return group idx if this line is just a group name, else -1."""
+        clean = re.sub(r'^כיתות?\s+', '', ln.strip()).strip()
+        clean = re.sub(r'^[*#\s]+|[*#\s]+$', '', clean)
+        if not clean or len(clean) > 25:
+            return -1
+        nc = _norm_group(clean)
+        for i, sg in enumerate(sched_groups):
+            ng = _norm_group(sg["name"])
+            if nc == ng:
+                return i
+            if len(nc) >= 2 and len(ng) >= 2 and (nc in ng or ng in nc):
+                return i
+            # Fuzzy first-word prefix: handles גנים↔גן חובה, ז-בוגרים↔ז-בוגרים
+            fw_nc = nc.split()[0] if ' ' in nc else nc
+            fw_ng = ng.split()[0] if ' ' in ng else ng
+            if len(fw_nc) >= 2 and len(fw_ng) >= 2 and fw_nc[:2] == fw_ng[:2] and (
+                fw_nc in fw_ng or fw_ng in fw_nc or fw_nc.startswith(fw_ng) or fw_ng.startswith(fw_nc)
+            ):
+                return i
+        return -1
+
+    txt_lines = text.splitlines()
+    f5_headers = [(i, _is_group_line(ln.strip()))
+                  for i, ln in enumerate(txt_lines)
+                  if _is_group_line(ln.strip()) >= 0]
+
+    if f5_headers:
+        _SKIP_ITEMS = {"אין אימון", "לא מתאמנים", "ביטול", "אין", ""}
+        sections_raw = []
+        for k, (li, gi) in enumerate(f5_headers):
+            end_li = f5_headers[k + 1][0] if k + 1 < len(f5_headers) else len(txt_lines)
+            block = "\n".join(txt_lines[li + 1:end_li])
+            items = [it for it in _extract_items(block) if it.strip() not in _SKIP_ITEMS]
+            sections_raw.append((gi, items))
+
+        result = []
+        used_gi = {gi for gi, _ in sections_raw}
+        for gi, items in sorted(sections_raw, key=lambda x: x[0]):
+            result.append((sched_groups[gi], items))
+        for i, sg in enumerate(sched_groups):
+            if i not in used_gi:
                 result.append((sg, []))
         return result
 
