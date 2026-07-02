@@ -806,9 +806,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Log conversation for Cowork sync
+    # Log conversation for Cowork sync (check before label stripping)
     try:
-        action_tag = "תוכנית אימון" if any(k in reply for k in ("חימום:", "תרגול:", "קרבות:")) else "תשובה כללית"
+        action_tag = ("תוכנית אימון" if any(k in reply for k in ("חימום:", "תרגול:", "קרבות:", "ד-ח:", "א-ג:", "גנים:"))
+                      else "תשובה כללית")
     except Exception as _cle:
         log.debug(f"conv log skipped: {_cle}")
 
@@ -819,19 +820,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         csv_content = reply[csv_start:csv_end].strip()
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
-        PLAN_KEYWORDS = ("חימום", "תרגול", "קרבות", "רנדורי", "כוח", "סיום",
-                         "EMOM", "E2MOM", "E1MOM", "AMRAP", "טבאטה", "Tabata",
-                         "שליחים", "ג'ונגל", "ביסט", "עיר הקרב", "ג'ודופונג",
-                         "Bench", "Pull-up", "Rope Climb", "Box Jump")
-        # זיהוי מחמיר: חייב מבנה מסודר עם נקודותיים (חימום: / תרגול:) — לא רק מילות מפתח
+        import re as _plan_re
+        # Detect plans: labeled format ("חימום: x") OR group-header format ("ד-ח:\n")
         PLAN_STRUCTURE = ("חימום:", "תרגול:", "קרבות:", "משחק:", "כוח:", "רנדורי:")
+        _GROUP_HEADERS = [f"{g}:" for g in [
+            "ד-ח", "א-ג", "א-ב", "ג-ו", "ג-ז", "ג", "גנים", "ד-ו",
+            "ז-בוגרים", "ז-ח", "נבחרת", "ב-ד", "ה-ז", 'ט-י"ב']]
         NEGATIVE_SIGNALS = ("צריך לתקן", "שגיאה בקוד", "הפונקציה", "לשמור לגיליון?",
                             "הבוט כתב", "במקום להציג", "ארגומנטים")
-        has_structure = sum(1 for k in PLAN_STRUCTURE if k in reply) >= 2
+        has_structure = (
+            sum(1 for k in PLAN_STRUCTURE if k in reply) >= 2
+            or sum(1 for h in _GROUP_HEADERS if h in reply) >= 1
+        )
         has_negative  = any(n in reply for n in NEGATIVE_SIGNALS)
         is_training_plan = has_structure and not has_negative
 
         if is_training_plan:
+            # Strip "חימום:", "תרגול:", etc. prefixes — save and display content only
+            _LABEL_RE = _plan_re.compile(r'(?m)^(חימום|תרגול|קרבות|משחק|כוח|נוסף|סיום|נושא)\s*:\s*')
+            reply = _LABEL_RE.sub('', reply)
             # Detect branch+date from original request and store — so save works even
             # if user types "מאשר" or "שמור" without clicking the button
             _b, _d = tp.detect_branch_and_date(user_text)
