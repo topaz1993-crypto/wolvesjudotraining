@@ -256,7 +256,7 @@ async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_da
                 lines.append(f"*{g['group']}*{time_str}:")
                 if g["rows"]:
                     for rt, val in g["rows"]:
-                        lines.append(f"  {rt}: {val}")
+                        lines.append(f"  {val}")
                 else:
                     lines.append("  ⚠️ אין תוכן")
                 lines.append("")

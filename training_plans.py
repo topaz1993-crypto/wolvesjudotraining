@@ -578,51 +578,21 @@ KEYWORDS_BY_BRANCH = {
 
 def smart_map_items(items: list[str], n_rows: int, branch: str = "") -> list[str]:
     """
-    Map plan items to sheet rows by keyword detection.
-    Uses branch-specific keywords for איפון פייט and פונקציונלי.
+    Map plan items to sheet rows positionally: line 1 → row 1, line 2 → row 2, etc.
+    Content is saved exactly as written. Extra items overflow into the last row.
     """
     if not items:
         return [""] * n_rows
 
-    kw_set = KEYWORDS_BY_BRANCH.get(branch, KEYWORDS_BY_BRANCH["default"])
-    row_types = ROW_TYPES[:n_rows]
     result = [""] * n_rows
 
-    used = set()
-    # First pass: labeled items (e.g. "חימום: שליחים") — exact row type match
-    ROW_TYPE_SET = set(ROW_TYPES)
-    for item_idx, item in enumerate(items):
-        if item_idx in used or not item:
-            continue
-        if ':' in item:
-            prefix = item.split(':', 1)[0].strip()
-            if prefix in ROW_TYPE_SET:
-                rt_idx = ROW_TYPES.index(prefix) if prefix in ROW_TYPES[:n_rows] else -1
-                if rt_idx >= 0 and not result[rt_idx]:
-                    result[rt_idx] = item.split(':', 1)[1].strip()  # strip the "חימום:" label
-                    used.add(item_idx)
-
-    # Second pass: keyword matching
-    for rt_idx, rt in enumerate(row_types):
-        if result[rt_idx]:
-            continue
-        kws = kw_set.get(rt, [])
-        for item_idx, item in enumerate(items):
-            if item_idx in used or not item:
-                continue
-            item_lower = item.lower()
-            if any(kw.lower() in item_lower for kw in kws):
-                result[rt_idx] = item
-                used.add(item_idx)
-                break
-
-    # Third pass: fill remaining slots sequentially
-    remaining = [item for i, item in enumerate(items) if i not in used and item]
+    # Positional fill: item i → row i
+    remaining = [item for item in items if item]
     for rt_idx in range(n_rows):
-        if not result[rt_idx] and remaining:
+        if remaining:
             result[rt_idx] = remaining.pop(0)
 
-    # Fourth pass: overflow — append remaining items to last row so nothing is lost
+    # Overflow: append extra items to last row so nothing is lost
     if remaining and n_rows > 0:
         last_idx = n_rows - 1
         overflow = "\n".join(remaining)
@@ -1071,18 +1041,12 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
             cleaned = _clean_line(line)
             if not cleaned or re.match(r'^[-=]{3,}$', cleaned):
                 continue
-            # If line starts with a row-type label (חימום:, תרגול:, etc.),
-            # keep it as one item — don't split on commas (e.g. "תרגול: A, B, C")
-            low = cleaned.lower()
-            is_labeled = any(low.startswith(p.lower()) for p in ROW_TYPE_PREFIXES)
-            if is_labeled:
-                items.append(cleaned)
-            elif ',' in cleaned:
-                for part in cleaned.split(','):
-                    p = part.strip()
-                    if p:
-                        items.append(p)
-            else:
+            # Strip leading row-type label ("חימום: content" → "content")
+            for prefix in ROW_TYPE_PREFIXES:
+                if cleaned.lower().startswith(prefix.lower()):
+                    cleaned = cleaned[len(prefix):].strip()
+                    break
+            if cleaned:
                 items.append(cleaned)
         return items
 
