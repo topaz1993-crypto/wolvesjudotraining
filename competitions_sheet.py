@@ -89,9 +89,11 @@ def _medal_bg(val: str) -> Optional[dict]:
     return None
 
 
-HEADERS = ['#', 'שם', 'משפחה', 'מועדון', 'שנתון', 'משקל', 'קרב 1', 'קרב 2', 'קרב 3', 'קרב 4']
-COL_WIDTHS = [40, 90, 100, 100, 75, 75, 80, 80, 80, 80]  # px per column
-N_COLS = len(HEADERS)
+HEADERS = ['#', 'שם', 'משפחה', 'מועדון', 'שנתון', 'משקל',
+           'קרב 1', 'קרב 2', 'קרב 3', 'קרב 4', 'קרב 5', 'קרב 6', 'קרב 7',
+           'מקום', 'מדליה', 'הערות']
+COL_WIDTHS = [40, 90, 100, 100, 70, 70, 75, 75, 75, 75, 75, 75, 75, 65, 65, 130]
+N_COLS = 16  # A–P
 
 
 def design_tab(service, tab_name: str, sheet_id: int, rows: list):
@@ -140,10 +142,10 @@ def design_tab(service, tab_name: str, sheet_id: int, rows: list):
             "verticalAlignment": "MIDDLE",
         }))
 
-        # Medal highlighting in קרב columns (cols 6–9)
+        # Medal highlighting in קרב 1-7 (cols 6-12) + מדליה (col 14)
         if i < len(rows):
             row_vals = rows[i]
-            for c_off, c_idx in enumerate(range(6, N_COLS)):
+            for c_off, c_idx in enumerate(list(range(6, 13)) + [14]):
                 val = row_vals[c_idx] if c_idx < len(row_vals) else ""
                 if val:
                     medal_bg = _medal_bg(val)
@@ -170,21 +172,17 @@ def design_tab(service, tab_name: str, sheet_id: int, rows: list):
 def ensure_headers(service, tab_name: str, sheet_id: int, rows: list):
     """Write HEADERS row if row 1 is empty or doesn't match."""
     current_headers = rows[0] if rows else []
-    expected = HEADERS
-
-    # Check if headers need to be written (first meaningful column)
-    current_clean = [c.strip() for c in current_headers[:len(expected)]]
-    expected_for_compare = ['', 'שם', 'משפחה', 'מועדון', 'שנתון', 'משקל',
-                            'קרב 1', 'קרב 2', 'קרב 3', 'קרב 4']
-    # The first column is either '' or '#'
-    if current_clean[1:] == expected_for_compare[1:]:
-        return  # Headers already correct
+    current_clean = [c.strip() for c in current_headers[:N_COLS]]
+    expected_clean = HEADERS[:]
+    expected_clean[0] = current_clean[0] if current_clean else ''  # '#' or '' is OK
+    if current_clean == expected_clean:
+        return  # Already correct
 
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"'{tab_name}'!A1",
         valueInputOption="RAW",
-        body={"values": [expected]}
+        body={"values": [HEADERS]}
     ).execute()
 
 
@@ -222,21 +220,27 @@ def get_competitions() -> list[dict]:
     result = []
     for tab in tabs:
         data = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"'{tab}'!A1:J100"
+            spreadsheetId=SPREADSHEET_ID, range=f"'{tab}'!A1:P300"
         ).execute().get('values', [])
         participants = []
         for row in data[1:]:
-            if len(row) >= 3 and row[0].strip():
-                name = f"{row[1]} {row[2]}".strip() if len(row) > 2 else row[1]
-                club   = row[3].strip() if len(row) > 3 else ''
-                year   = row[4].strip() if len(row) > 4 else ''
-                weight = row[5].strip() if len(row) > 5 else ''
-                results = [row[c].strip() if c < len(row) else '' for c in range(6, 10)]
-                medal_results = [r for r in results if r]
-                participants.append({
-                    'name': name, 'club': club, 'year': year,
-                    'weight': weight, 'results': medal_results,
-                })
+            if not (row and row[0].strip()):
+                continue
+            first  = row[1].strip() if len(row) > 1 else ''
+            last   = row[2].strip() if len(row) > 2 else ''
+            club   = row[3].strip() if len(row) > 3 else ''
+            year   = row[4].strip() if len(row) > 4 else ''
+            weight = row[5].strip() if len(row) > 5 else ''
+            fights = [row[c].strip() if c < len(row) else '' for c in range(6, 13)]
+            place  = row[13].strip() if len(row) > 13 else ''
+            medal  = row[14].strip() if len(row) > 14 else ''
+            notes  = row[15].strip() if len(row) > 15 else ''
+            results = [r for r in fights + [medal] if r]
+            participants.append({
+                'name': f"{first} {last}".strip(),
+                'club': club, 'year': year, 'weight': weight,
+                'results': results, 'place': place, 'medal': medal, 'notes': notes,
+            })
         result.append({'competition': tab, 'participants': participants})
     return result
 
@@ -265,3 +269,44 @@ def get_stats() -> dict:
         'medals': medals,
         'competitions': comps,
     }
+
+
+def get_tabs() -> list[str]:
+    """Return list of competition tab names (excluding the main 'תחרות' tab)."""
+    service = _get_service()
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    return [s['properties']['title'] for s in meta['sheets']
+            if s['properties']['title'] != 'תחרות']
+
+
+def add_participant(tab_name: str, first: str, last: str,
+                    club: str, year: str, weight: str = '') -> int:
+    """Append a participant row and return their sequential number."""
+    service = _get_service()
+    data = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"'{tab_name}'!A1:A300"
+    ).execute().get('values', [])
+    n = len([r for r in data[1:] if r and r[0].strip()])
+    next_row = n + 2  # header=row1, 1-based participant count
+    num = n + 1
+    row = [num, first, last, club, year, weight] + [''] * 10
+    service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"'{tab_name}'!A{next_row}:P{next_row}",
+        valueInputOption='RAW',
+        body={'values': [row]}
+    ).execute()
+    return num
+
+
+def update_result(tab_name: str, participant_num: int, result: str) -> None:
+    """Write result to the מדליה column (O) for the given participant number."""
+    service = _get_service()
+    sheet_row = participant_num + 1  # row 1 = header
+    service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"'{tab_name}'!O{sheet_row}",
+        valueInputOption='RAW',
+        body={'values': [[result]]}
+    ).execute()

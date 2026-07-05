@@ -1997,21 +1997,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.message.chat.send_action("typing")
         try:
-            s = comp_sheet.get_stats()
-            lines = [f"🏆 *תחרויות — {s['total_competitions']} סה\"כ*\n"]
-            for name, n in sorted(s['by_competition'].items(), key=lambda x: -x[1]):
-                lines.append(f"  *{name}*: {n} ספורטאים")
-            if s['medals']:
-                lines.append("\n🥇 *מדליות:*")
-                for k, v in s['medals'].items():
-                    lines.append(f"  {k}: {v}")
-            await query.message.reply_text("\n".join(lines), parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 פתח גיליון", url=SHEET_LINKS["תחרויות"])],
-                    [InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")],
-                ]))
+            tabs = comp_sheet.get_tabs()
+            user_id_local = str(query.from_user.id)
+            sheets_sessions[user_id_local] = {'step': 'comp_pick_tab', 'tabs': tabs}
+            btns = [[InlineKeyboardButton(t, callback_data=f"comp_tab_{i}")]
+                    for i, t in enumerate(tabs)]
+            btns.append([InlineKeyboardButton("📊 פתח גיליון", url=SHEET_LINKS["תחרויות"])])
+            btns.append([InlineKeyboardButton("🔙 תפריט", callback_data="menu_back")])
+            await query.edit_message_text("🏆 *בחר תחרות:*", parse_mode="Markdown",
+                                          reply_markup=InlineKeyboardMarkup(btns))
         except Exception as e:
-            await query.message.reply_text(f"❌ שגיאה: {e}")
+            await query.edit_message_text(f"❌ שגיאה: {e}")
         return
 
     # ── ארכיון תוכניות ──
@@ -2113,7 +2109,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if action.startswith("camp_") or action.startswith("lyla_"):
+    if action.startswith("camp_") or action.startswith("lyla_") or action.startswith("comp_"):
         await handle_sheets_callback(query, user_id, action, context)
         return
 
@@ -4189,6 +4185,27 @@ def lyla_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def comp_action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 הצג משתתפים", callback_data="comp_action_show"),
+         InlineKeyboardButton("➕ הוסף ספורטאי", callback_data="comp_action_add")],
+        [InlineKeyboardButton("🏅 עדכן תוצאות", callback_data="comp_action_result"),
+         InlineKeyboardButton("🎨 עיצב גיליון", callback_data="comp_action_design")],
+        [InlineKeyboardButton("🔙 חזור לרשימה", callback_data="menu_competitions")],
+    ])
+
+
+def comp_clubs_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("סירקין",    callback_data="comp_club_סירקין"),
+         InlineKeyboardButton("חגור",      callback_data="comp_club_חגור"),
+         InlineKeyboardButton("נווה ירק",  callback_data="comp_club_נווה ירק")],
+        [InlineKeyboardButton("אהרונוביץ", callback_data="comp_club_אהרונוביץ"),
+         InlineKeyboardButton("איפון פייט",callback_data="comp_club_איפון פייט"),
+         InlineKeyboardButton("אחר",       callback_data="comp_club_אחר")],
+    ])
+
+
 def branch_keyboard(prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("סירקין", callback_data=f"{prefix}סירקין"),
@@ -4276,6 +4293,24 @@ async def lyla_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=lyla_menu_keyboard(),
     )
+
+
+async def cmd_competition(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    msg = await update.message.reply_text("⏳ טוען תחרויות...")
+    try:
+        tabs = comp_sheet.get_tabs()
+        if not tabs:
+            await msg.edit_text("אין תחרויות בגיליון כרגע.")
+            return
+        sheets_sessions[user_id] = {'step': 'comp_pick_tab', 'tabs': tabs}
+        btns = [[InlineKeyboardButton(t, callback_data=f"comp_tab_{i}")]
+                for i, t in enumerate(tabs)]
+        btns.append([InlineKeyboardButton("📊 פתח גיליון", url=SHEET_LINKS["תחרויות"])])
+        await msg.edit_text("🏆 *בחר תחרות:*", parse_mode="Markdown",
+                            reply_markup=InlineKeyboardMarkup(btns))
+    except Exception as e:
+        await msg.edit_text(f"❌ שגיאה: {e}")
 
 
 async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -4792,6 +4827,62 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                          reply_markup=branch_keyboard("lyla_branch_"))
         return True
 
+    # ── Competition add flow ──────────────────────────────────────────────────
+    if step == 'comp_add_first':
+        ss['first'] = text
+        ss['step'] = 'comp_add_last'
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text("📝 *שם משפחה?*", parse_mode="Markdown")
+        return True
+
+    if step == 'comp_add_last':
+        ss['last'] = text
+        ss['step'] = 'comp_add_club'
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text("🏠 *מועדון?*", parse_mode="Markdown",
+                                         reply_markup=comp_clubs_keyboard())
+        return True
+
+    if step == 'comp_add_year':
+        ss['year'] = text
+        ss['step'] = 'comp_add_weight'
+        sheets_sessions[user_id] = ss
+        await update.message.reply_text("⚖️ *משקל?* (לדוגמה: 32.5)\nשלח *-* לדלג",
+                                         parse_mode="Markdown")
+        return True
+
+    if step == 'comp_add_weight':
+        weight = '' if text.strip() == '-' else text.strip()
+        tab   = ss.get('tab', '')
+        first = ss.get('first', '')
+        last  = ss.get('last', '')
+        club  = ss.get('club', '')
+        year  = ss.get('year', '')
+        sheets_sessions.pop(user_id, None)
+        try:
+            num = comp_sheet.add_participant(tab, first, last, club, year, weight)
+            await update.message.reply_text(
+                f"✅ #{num} *{first} {last}* נוסף!\n🏠 {club} | {year}"
+                + (f" | {weight}ק\"ג" if weight else ""),
+                parse_mode="Markdown", reply_markup=comp_action_keyboard())
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה: {e}")
+        return True
+
+    # ── Competition result flow ───────────────────────────────────────────────
+    if step == 'comp_result_text':
+        part_num = ss.get('comp_part_num', 0)
+        tab = ss.get('tab', '')
+        sheets_sessions.pop(user_id, None)
+        try:
+            comp_sheet.update_result(tab, part_num, text)
+            await update.message.reply_text(
+                f"✅ #{part_num} → *{text}*", parse_mode="Markdown",
+                reply_markup=comp_action_keyboard())
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה: {e}")
+        return True
+
     if text == 'ביטול':
         sheets_sessions.pop(user_id, None)
         await update.message.reply_text("❌ בוטל.")
@@ -4991,6 +5082,130 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
                 )
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=lyla_menu_keyboard())
+        return True
+
+    # ── Competition callbacks ─────────────────────────────────────────────────
+
+    if action.startswith('comp_tab_'):
+        try:
+            idx = int(action[len('comp_tab_'):])
+        except ValueError:
+            await query.answer("❌ לא תקין")
+            return True
+        ss = sheets_sessions.get(user_id, {})
+        tabs = ss.get('tabs', [])
+        if not tabs:
+            tabs = comp_sheet.get_tabs()
+        if idx >= len(tabs):
+            await query.answer("❌ לא נמצא")
+            return True
+        tab = tabs[idx]
+        sheets_sessions[user_id] = {**ss, 'tab': tab, 'step': 'comp_action', 'tabs': tabs}
+        await query.edit_message_text(
+            f"🏆 *{tab}*\nבחר פעולה:",
+            parse_mode="Markdown", reply_markup=comp_action_keyboard())
+        return True
+
+    if action == 'comp_action_show':
+        ss = sheets_sessions.get(user_id, {})
+        tab = ss.get('tab', '')
+        await query.edit_message_text("⏳ טוען...")
+        try:
+            comps = comp_sheet.get_competitions()
+            comp  = next((c for c in comps if c['competition'] == tab), None)
+            if not comp or not comp['participants']:
+                await query.edit_message_text(f"📋 *{tab}*\n\nאין משתתפים עדיין.",
+                                               parse_mode="Markdown",
+                                               reply_markup=comp_action_keyboard())
+                return True
+            lines = [f"📋 *{tab}* — {len(comp['participants'])} ספורטאים\n"]
+            for i, p in enumerate(comp['participants'], 1):
+                medal = p.get('medal', '') or p.get('place', '')
+                w = f" {p['weight']}ק\"ג" if p.get('weight') else ""
+                lines.append(f"{i}\\. *{p['name']}* | {p['club']} {p.get('year','')}{w}"
+                              + (f"  {medal}" if medal else ""))
+            await query.edit_message_text("\n".join(lines), parse_mode="MarkdownV2",
+                                           reply_markup=comp_action_keyboard())
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=comp_action_keyboard())
+        return True
+
+    if action == 'comp_action_add':
+        ss = sheets_sessions.get(user_id, {})
+        ss['step'] = 'comp_add_first'
+        sheets_sessions[user_id] = ss
+        await query.edit_message_text("➕ *שם פרטי של הספורטאי?*", parse_mode="Markdown")
+        return True
+
+    if action == 'comp_action_design':
+        await query.edit_message_text("🎨 מעצב כל גיליונות התחרות...")
+        try:
+            result = comp_sheet.design_all_tabs()
+            await query.edit_message_text(f"✅ עיצוב הושלם:\n{result}",
+                                           reply_markup=comp_action_keyboard())
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=comp_action_keyboard())
+        return True
+
+    if action == 'comp_action_result':
+        ss = sheets_sessions.get(user_id, {})
+        tab = ss.get('tab', '')
+        await query.edit_message_text("⏳ טוען משתתפים...")
+        try:
+            comps = comp_sheet.get_competitions()
+            comp  = next((c for c in comps if c['competition'] == tab), None)
+            if not comp or not comp['participants']:
+                await query.edit_message_text(f"אין משתתפים ב-{tab}",
+                                               reply_markup=comp_action_keyboard())
+                return True
+            btns = []
+            for i, p in enumerate(comp['participants'], 1):
+                medal = p.get('medal', '')
+                label = f"{i}. {p['name']}" + (f"  {medal}" if medal else "")
+                btns.append([InlineKeyboardButton(label, callback_data=f"comp_part_{i}")])
+            btns.append([InlineKeyboardButton("🔙 חזור", callback_data="comp_action_back")])
+            await query.edit_message_text(
+                f"🏅 *{tab}*\nבחר ספורטאי לעדכון תוצאה:",
+                parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=comp_action_keyboard())
+        return True
+
+    if action.startswith('comp_part_'):
+        try:
+            num = int(action[len('comp_part_'):])
+        except ValueError:
+            await query.answer("❌")
+            return True
+        ss = sheets_sessions.get(user_id, {})
+        ss['comp_part_num'] = num
+        ss['step'] = 'comp_result_text'
+        sheets_sessions[user_id] = ss
+        await query.edit_message_text(
+            f"🏅 ספורטאי #{num} — תוצאה?\n(לדוגמה: 🥇  🥈  🥉  5  לא השתתף)",
+            parse_mode="Markdown")
+        return True
+
+    if action.startswith('comp_club_'):
+        club = action[len('comp_club_'):]
+        ss = sheets_sessions.get(user_id, {})
+        ss['club'] = club
+        ss['step'] = 'comp_add_year'
+        sheets_sessions[user_id] = ss
+        await query.edit_message_text("📅 *שנתון?* (לדוגמה: 2015)", parse_mode="Markdown")
+        return True
+
+    if action == 'comp_action_back':
+        ss = sheets_sessions.get(user_id, {})
+        tab = ss.get('tab', '')
+        await query.edit_message_text(
+            f"🏆 *{tab}*\nבחר פעולה:",
+            parse_mode="Markdown", reply_markup=comp_action_keyboard())
+        return True
+
+    if action == 'comp_cancel':
+        sheets_sessions.pop(user_id, None)
+        await query.edit_message_text("❌ בוטל.")
         return True
 
     return False
@@ -6787,6 +7002,7 @@ def main():
     app.add_handler(CommandHandler("wa_groups", cmd_wa_groups))
     app.add_handler(CommandHandler("contacts_import", cmd_contacts_import))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
+    app.add_handler(CommandHandler("competition", cmd_competition))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
