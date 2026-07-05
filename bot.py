@@ -121,6 +121,8 @@ pending_plans: dict[str, str] = load_json(PENDING_FILE, {})
 attendance_sessions: dict[str, dict] = {}
 # pending_payments[key] = {student, month, amount, email_id, subject, sender}
 pending_payments: dict[str, dict] = {}
+# pending_competitions[user_id] = {tab, names} — bulk add awaiting confirmation
+pending_competitions: dict[str, dict] = {}
 # action_history[user_id] = list of {type, description, undo_fn_name, undo_data}
 action_history: dict[str, list] = {}
 # sheets_sessions[user_id] = active camp/lyla flow session
@@ -821,6 +823,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await deliver_csv(context, update.effective_chat.id, reply, csv_content)
     else:
         import re as _plan_re
+        # Detect competition bulk-add marker: COMP_ADD: <tab> | <name1>, <name2>, ...
+        _COMP_ADD_RE = _plan_re.compile(r'(?m)^COMP_ADD:\s*(.+?)\s*\|\s*(.+?)$')
+        _cm = _COMP_ADD_RE.search(reply)
+        if _cm:
+            _tab_raw  = _cm.group(1).strip()
+            _names    = [n.strip() for n in _cm.group(2).split(',') if n.strip()]
+            # fuzzy-match to known tab
+            _tab_match = _tab_raw
+            try:
+                _all_tabs = comp_sheet.get_tabs()
+                for _t in _all_tabs:
+                    if _tab_raw in _t or any(w in _t for w in _tab_raw.split() if len(w) > 2):
+                        _tab_match = _t
+                        break
+            except Exception:
+                pass
+            pending_competitions[user_id] = {'tab': _tab_match, 'names': _names}
+            _reply_clean = _COMP_ADD_RE.sub('', reply).strip()
+            _short_tab = _tab_match[:28] + ('…' if len(_tab_match) > 28 else '')
+            _comp_save_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"💾 שמור לגיליון — {_short_tab}", callback_data="comp_bulk_save")],
+                [InlineKeyboardButton("❌ ביטול", callback_data="comp_bulk_cancel")],
+            ])
+            await update.message.reply_text(
+                _reply_clean or f"הוספת {len(_names)} ספורטאים ל-{_tab_match}?",
+                reply_markup=_comp_save_markup,
+            )
+            return
+
         # Detect plans: labeled format ("חימום: x") OR group-header format ("ד-ח:\n")
         PLAN_STRUCTURE = ("חימום:", "תרגול:", "קרבות:", "משחק:", "כוח:", "רנדורי:")
         _GROUP_HEADERS = [f"{g}:" for g in [
@@ -5085,6 +5116,37 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
         return True
 
     # ── Competition callbacks ─────────────────────────────────────────────────
+
+    if action == 'comp_bulk_save':
+        pc = pending_competitions.get(user_id, {})
+        tab   = pc.get('tab', '')
+        names = pc.get('names', [])
+        if not tab or not names:
+            await query.answer("❌ אין נתונים לשמירה")
+            return True
+        await query.edit_message_text("⏳ שומר ספורטאים...")
+        try:
+            added = []
+            for full in names:
+                parts = full.strip().split()
+                first = parts[0] if parts else full
+                last  = ' '.join(parts[1:]) if len(parts) > 1 else ''
+                comp_sheet.add_participant(tab, first, last, '', '')
+                added.append(full)
+            pending_competitions.pop(user_id, None)
+            sheets_sessions[user_id] = {'tab': tab, 'step': 'comp_action'}
+            msg = (f"✅ נשמרו {len(added)} ספורטאים ל-*{tab}*:\n"
+                   + '\n'.join(f"• {n}" for n in added))
+            await query.edit_message_text(msg, parse_mode="Markdown",
+                                           reply_markup=comp_action_keyboard())
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בשמירה: {e}")
+        return True
+
+    if action == 'comp_bulk_cancel':
+        pending_competitions.pop(user_id, None)
+        await query.edit_message_text("❌ ביטול. ספורטאים לא נשמרו.")
+        return True
 
     if action.startswith('comp_tab_'):
         try:
