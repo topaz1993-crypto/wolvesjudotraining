@@ -39,6 +39,16 @@ def _repeat(sid, r1, r2, c1, c2, fmt):
     }}
 
 
+def _repeat_nocolor(sid, r1, r2, c1, c2, fmt):
+    """Like _repeat but does NOT touch backgroundColor — preserves manual cell colors."""
+    return {"repeatCell": {
+        "range": {"sheetId": sid, "startRowIndex": r1, "endRowIndex": r2,
+                  "startColumnIndex": c1, "endColumnIndex": c2},
+        "cell": {"userEnteredFormat": fmt},
+        "fields": "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
+    }}
+
+
 def _border(sid, r1, r2, c1, c2, inner=True):
     thin   = {"style": "SOLID",        "color": _BORDER}
     thick  = {"style": "SOLID_MEDIUM", "color": _BORDER_NAVY}
@@ -127,14 +137,16 @@ def design_tab(service, tab_name: str, sheet_id: int, rows: list):
     # ── Participant rows (alternating) ──
     for i in range(1, n_rows):
         row_bg = _ROW_A if i % 2 == 1 else _ROW_B
-        reqs.append(_repeat(sheet_id, i, i + 1, 0, N_COLS, {
+
+        # Cols A–F (0-5): identity columns — apply background + text
+        reqs.append(_repeat(sheet_id, i, i + 1, 0, 6, {
             "backgroundColor": row_bg,
             "textFormat": {"fontSize": 10},
             "horizontalAlignment": "CENTER",
             "verticalAlignment": "MIDDLE",
             "wrapStrategy": "WRAP",
         }))
-        # Left-align name columns
+        # שם + משפחה (cols B-C): right-align
         reqs.append(_repeat(sheet_id, i, i + 1, 1, 3, {
             "backgroundColor": row_bg,
             "textFormat": {"fontSize": 10},
@@ -142,20 +154,13 @@ def design_tab(service, tab_name: str, sheet_id: int, rows: list):
             "verticalAlignment": "MIDDLE",
         }))
 
-        # Medal highlighting in קרב 1-7 (cols 6-12) + מדליה (col 14)
-        if i < len(rows):
-            row_vals = rows[i]
-            for c_off, c_idx in enumerate(list(range(6, 13)) + [14]):
-                val = row_vals[c_idx] if c_idx < len(row_vals) else ""
-                if val:
-                    medal_bg = _medal_bg(val)
-                    if medal_bg:
-                        reqs.append(_repeat(sheet_id, i, i + 1, c_idx, c_idx + 1, {
-                            "backgroundColor": medal_bg,
-                            "textFormat": {"fontSize": 10, "bold": True},
-                            "horizontalAlignment": "CENTER",
-                            "verticalAlignment": "MIDDLE",
-                        }))
+        # Cols G–P (6-15): fight/result columns — text format ONLY, preserve manual colors
+        reqs.append(_repeat_nocolor(sheet_id, i, i + 1, 6, N_COLS, {
+            "textFormat": {"fontSize": 10, "bold": True},
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "wrapStrategy": "WRAP",
+        }))
 
     # ── Borders ──
     if n_rows > 0:
