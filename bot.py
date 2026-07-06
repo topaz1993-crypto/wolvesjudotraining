@@ -35,6 +35,7 @@ import training_archive as arc
 import contacts as contacts_db
 import invoice4u_reader
 import invoice4u_sync
+import finance_sync
 import payment_matcher
 import registration_sync
 import wa_client
@@ -912,6 +913,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     if action == "noop":
         await query.answer()
+        return
+
+    # ─── Finance P&L confirm callback ───
+    if action.startswith("finance_confirm|"):
+        await query.answer()
+        choice = action.split("|", 1)[1]
+        sess = sheets_sessions.pop(user_id, {})
+        if choice == "no" or not sess:
+            await query.edit_message_text("❌ עדכון בוטל.")
+            return
+        extracted = sess.get("extracted", {})
+        sheet_id  = extracted.pop("_sheet_id", finance_sync.PL_2026_2027)
+        try:
+            result = finance_sync.apply_update(sheet_id, extracted)
+            await query.edit_message_text(result, parse_mode="Markdown")
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בעדכון הגיליון: {e}")
         return
 
     # ─── Plan edit callbacks ───
@@ -3008,12 +3026,73 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 
+async def cmd_update_finances(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start finance file upload flow — /update_finances"""
+    user_id = str(update.effective_user.id)
+    sheets_sessions[user_id] = {"step": "finance_awaiting_file"}
+    await update.message.reply_text(
+        "💰 *עדכון נתוני כספים*\n\n"
+        "שלח את הקובץ ואני אחלץ ממנו את הנתונים ואעדכן את גיליון P&L.\n\n"
+        "סוגי קבצים נתמכים:\n"
+        "• CSV מ-Invoice4u — הכנסות לפי סניף\n"
+        "• Excel/PDF מהרו\"ח — שכר מדריכים\n"
+        "• PDF/טקסט דוח מיסים — מקדמות מס ומע\"מ\n"
+        "• CSV תדפיס בנק — הוצאות\n\n"
+        "_שלח /reset לביטול_",
+        parse_mode="Markdown"
+    )
+
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle XLS/XLSX file uploads — detect invoice4u report and start payment sync flow."""
+    """Handle file uploads — invoice4u XLS/XLSX (existing flow) + finance P&L updates."""
     doc = update.message.document
     if not doc:
         return
     fname = doc.file_name or ""
+    user_id = str(update.effective_user.id)
+
+    # ── Finance P&L update flow ────────────────────────────────────────
+    sess = sheets_sessions.get(user_id, {})
+    if sess.get("step") == "finance_awaiting_file":
+        SUPPORTED = (".csv", ".xlsx", ".xls", ".pdf", ".txt")
+        if not any(fname.lower().endswith(ext) for ext in SUPPORTED):
+            await update.message.reply_text(
+                f"⚠️ סוג קובץ לא נתמך: {fname}\n"
+                "נסה CSV, Excel, PDF, או TXT."
+            )
+            return
+
+        await update.message.reply_text("📂 מוריד ומנתח קובץ... ⏳")
+        try:
+            file = await context.bot.get_file(doc.file_id)
+            data = bytes(await file.download_as_bytearray())
+            extracted, preview = finance_sync.process_file(fname, data)
+        except Exception as e:
+            await update.message.reply_text(f"❌ שגיאה בניתוח הקובץ: {e}")
+            sheets_sessions.pop(user_id, None)
+            return
+
+        if not extracted.get("month"):
+            await update.message.reply_text(
+                "⚠️ לא הצלחתי לזהות חודש בקובץ.\n"
+                "כדאי לבדוק שהקובץ מכיל תאריכים ברורים."
+            )
+            sheets_sessions.pop(user_id, None)
+            return
+
+        sheets_sessions[user_id] = {
+            "step": "finance_confirm",
+            "extracted": extracted,
+        }
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ אישור — עדכן גיליון", callback_data="finance_confirm|yes")],
+            [InlineKeyboardButton("❌ ביטול", callback_data="finance_confirm|no")],
+        ])
+        await update.message.reply_text(preview, parse_mode="Markdown",
+                                        reply_markup=keyboard)
+        return
+
+    # ── Existing Invoice4u XLS/XLSX flow ──────────────────────────────
     if not (fname.endswith(".xls") or fname.endswith(".xlsx")):
         return  # not a spreadsheet — ignore
 
@@ -7065,6 +7144,7 @@ def main():
     app.add_handler(CommandHandler("contacts_import", cmd_contacts_import))
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CommandHandler("competition", cmd_competition))
+    app.add_handler(CommandHandler("update_finances", cmd_update_finances))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
