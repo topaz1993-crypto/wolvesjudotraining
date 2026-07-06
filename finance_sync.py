@@ -30,21 +30,25 @@ MONTH_YEAR_2026 = {"ספטמבר":2026,"אוקטובר":2026,"נובמבר":2026
                    "מאי":2027,"יוני":2027,"יולי":2027}
 
 # שורות בגיליון (זהה בשני הגיליונות)
+# Row 3: BI סירקין (פונקציונלי + מועדון + נבחרת + איפון פייט)
+# Row 4: GROW סליקת אשראי (חגור + נווה ירק + אהרונוביץ + חליפות/חגורות)
+# Row 5: הכנסות אחרות (תחרויות + אירועים + מחנות)
+# Row 6: empty
 ROW = {
-    "sirkeen":     3,
-    "grouo":       4,
-    "ippon":       5,
-    "other":       6,
+    "bi_sirkeen":  3,
+    "grow":        4,
+    "other":       5,
     "eidan":      17,
     "instructors":18,
     "it":         31,
     "vat":        32,
 }
 
-BRANCH_KEYWORDS = {
-    "sirkeen": ["סירקין", "sirkeen"],
-    "grouo":   ["גרואו", "grouo", "חגור", "נווה", "אהרונוביץ"],
-    "ippon":   ["איפון", "ippon", "fight"],
+# BI Sirkeen = all Sirkeen-based activities (functional, club, athletes, ippon fight)
+# GROW = credit card terminal: Hagor + Neve Yarak + Aharonovich + uniforms/belts
+CHANNEL_KEYWORDS = {
+    "bi_sirkeen": ["סירקין", "sirkeen", "פונקציונלי", "איפון", "ippon", "נבחרת"],
+    "grow":       ["גרואו", "grow", "חגור", "נווה", "אהרונוביץ", "חליפות", "חגורות"],
 }
 
 
@@ -103,10 +107,12 @@ def apply_update(sheet_id: str, update: dict):
         ).execute()
 
     income = update.get("income", {})
-    for k in ["sirkeen", "grouo", "ippon", "other"]:
+    # income keys: bi_sirkeen (row 3), grow (row 4), other (row 5)
+    # "ippon" is INSIDE bi_sirkeen — no separate row
+    for k in ["bi_sirkeen", "grow", "other"]:
         if k in income:
             write(k, income[k])
-            labels = {"sirkeen": "סירקין", "grouo": "גרואו", "ippon": "איפון פייט", "other": "אחרות"}
+            labels = {"bi_sirkeen": "BI סירקין", "grow": "GROW סליקת אשראי", "other": "הכנסות אחרות"}
             lines.append(f"  הכנסות {labels[k]}: {income[k]:,} ₪")
 
     salary = update.get("salary", {})
@@ -187,17 +193,17 @@ def extract_text(filename: str, data: bytes) -> str:
 # ─────────────────────────────────────────────────────────────────────
 
 EXTRACT_PROMPT = """
-אתה מנתח קבצים כספיים של מועדון ג'ודו. קרא את הטקסט הבא מקובץ כספי וחלץ נתונים.
+אתה מנתח קבצים כספיים של מועדון ג'ודו "וולבס". קרא את הטקסט הבא וחלץ נתונים.
 
 החזר JSON בפורמט הזה (השמט שדות שאין לך נתונים עליהם):
 {
-  "file_type": "invoice4u_csv | salary_report | bank_statement | tax_report",
+  "file_type": "invoice4u | salary_report | bank_statement | tax_report",
   "month": "שם חודש בעברית (ספטמבר/אוקטובר/.../יולי)",
   "year": 2026,
   "income": {
-    "sirkeen": 28000,
-    "grouo": 9000,
-    "ippon": 2500
+    "bi_sirkeen": 38000,
+    "grow": 20000,
+    "other": 0
   },
   "salary": {
     "eidan": 927,
@@ -209,18 +215,19 @@ EXTRACT_PROMPT = """
   }
 }
 
-מידע על המועדון:
-- סניפים: סירקין (הכי גדול), גרואו (חגור + נווה ירק + אהרונוביץ), איפון פייט
-- מדריכים: עידן ורדי (flat 927/חודש), נדב, בועז, נועה הדר, יהלי (דרך דיקלה ניצן)
-- "instructors" = סך כל שכר מדריכים פרט לעידן ורדי
-- מקדמות מס הכנסה = מס שוטף, לא חוב שומות
-- מע"מ = רק כשיש תשלום דו-חודשי
+מידע על ערוצי ההכנסה:
+- "bi_sirkeen": תשלומים דרך BI מסירקין — כולל פונקציונלי + מועדון + נבחרת + איפון פייט
+  (ממוצע: 35,000-38,000 ₪/חודש. ספטמבר וסוף עונה — קטן יותר)
+- "grow": GROW סליקת אשראי — חגור + נווה ירק + אהרונוביץ + חליפות + חגורות
+  (ממוצע: 17,000-22,000 ₪/חודש)
+- "other": תחרויות / אירועים / מחנות / הכנסות חד-פעמיות
+- שים לב: איפון פייט שייך ל-bi_sirkeen, לא נפרד!
+- שים לב: חליפות וחגורות הן הכנסה ב-grow, לא הוצאה
 
-אם הקובץ הוא Invoice4u — חשב סכום תשלומים לפי סניף.
-אם הקובץ הוא תדפיס בנק — חשב רק הוצאות עסקיות.
+מדריכים: עידן ורדי (927 ₪/חודש flat), נדב + בועז (דרך דיקלה ניצן), נועה הדר, יהלי
+- "instructors" = סך כל שכר פרט לעידן ורדי
 
 החזר JSON בלבד, ללא טקסט נוסף.
-
 ---
 תוכן הקובץ:
 """
