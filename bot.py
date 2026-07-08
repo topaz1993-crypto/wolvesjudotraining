@@ -4382,7 +4382,8 @@ def camp_menu_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton("📊 סטטיסטיקה", callback_data="camp_stats")],
         [InlineKeyboardButton("➕ הוסף ילד", callback_data="camp_add"),
          InlineKeyboardButton("✏️ עדכן פרטים", callback_data="camp_upd")],
-        [InlineKeyboardButton("🎨 עיצב גיליון", callback_data="camp_format")],
+        [InlineKeyboardButton("📧 בדוק מיילים", callback_data="camp_email_sync"),
+         InlineKeyboardButton("🎨 עיצב גיליון", callback_data="camp_format")],
     ])
 
 
@@ -5159,6 +5160,29 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
                                            reply_markup=camp_menu_keyboard())
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=camp_menu_keyboard())
+        return True
+
+    if action == 'camp_email_sync':
+        import os as _os
+        if not _os.environ.get("GMAIL_APP_PASS"):
+            await query.edit_message_text(
+                "⚠️ GMAIL_APP_PASS לא מוגדר ב-Render.\n"
+                "הוסף את הסיסמת האפליקציה של Gmail ב-Environment Variables.",
+                reply_markup=camp_menu_keyboard()
+            )
+            return True
+        await query.edit_message_text("📧 בודק מיילים...")
+        try:
+            report = registration_sync.run_sync_and_report()
+            if report:
+                await query.edit_message_text(report, parse_mode="Markdown",
+                                               reply_markup=camp_menu_keyboard())
+            else:
+                await query.edit_message_text("✅ אין רשומים חדשים במיילים.",
+                                               reply_markup=camp_menu_keyboard())
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בקריאת מיילים: {e}",
+                                           reply_markup=camp_menu_keyboard())
         return True
 
     # ── Camp branch pick (add flow) ──
