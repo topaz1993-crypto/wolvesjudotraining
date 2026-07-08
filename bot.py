@@ -36,6 +36,8 @@ import contacts as contacts_db
 import invoice4u_reader
 import invoice4u_sync
 import finance_sync
+import accountant_email
+import camp_shirts
 import payment_matcher
 import registration_sync
 import wa_client
@@ -930,6 +932,43 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(result, parse_mode="Markdown")
         except Exception as e:
             await query.edit_message_text(f"❌ שגיאה בעדכון הגיליון: {e}")
+        return
+
+    # ─── Camp shirts callbacks ───
+    if action in ("csh_summary", "csh_sync", "csh_missing"):
+        await query.answer()
+        await query.edit_message_text("⏳ טוען...")
+        try:
+            if action == "csh_summary":
+                msg = camp_shirts.format_summary()
+            elif action == "csh_sync":
+                result = camp_shirts.sync_to_camp()
+                msg = camp_shirts.format_sync_result(result)
+            else:
+                msg = camp_shirts.format_missing()
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 סיכום", callback_data="csh_summary"),
+                 InlineKeyboardButton("🔄 סנכרן", callback_data="csh_sync")],
+                [InlineKeyboardButton("❓ מי לא הזמין", callback_data="csh_missing")],
+            ])
+            await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=kb)
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}")
+        return
+
+    # ─── Accountant email confirm callback ───
+    if action.startswith("acct_email|"):
+        await query.answer()
+        choice = action.split("|", 1)[1]
+        sess = sheets_sessions.pop(user_id, {})
+        if choice == "no" or not sess:
+            await query.edit_message_text("❌ ביטול — המייל לא נשלח.")
+            return
+        try:
+            result = accountant_email.send_email(sess["subject"], sess["body"])
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה בשליחת מייל: {e}")
         return
 
     # ─── Plan edit callbacks ───
@@ -3043,6 +3082,41 @@ async def cmd_update_finances(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def cmd_accountant_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /accountant_report [חודש]
+    מציג תצוגה מקדימה של הדוח החודשי לרואה חשבון + כפתור שליחה.
+    ברירת מחדל: החודש הקודם.
+    """
+    user_id = str(update.effective_user.id)
+    args = context.args
+    if args:
+        month_name = args[0]
+        if month_name not in accountant_email.MONTHS:
+            months_list = " | ".join(accountant_email.MONTHS)
+            await update.message.reply_text(
+                f"❌ חודש לא מוכר: {month_name}\n\nחודשים אפשריים:\n{months_list}"
+            )
+            return
+    else:
+        month_name = accountant_email.prev_month_name()
+
+    await update.message.reply_text(f"⏳ מכין דוח לחודש {month_name}...")
+
+    try:
+        sess, preview = accountant_email.prepare_preview(month_name)
+    except Exception as e:
+        await update.message.reply_text(f"❌ שגיאה בקריאת הגיליון: {e}")
+        return
+
+    sheets_sessions[user_id] = {**sess, "step": "acct_email_confirm"}
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✉️ שלח מייל לרואה חשבון", callback_data="acct_email|yes")],
+        [InlineKeyboardButton("❌ ביטול", callback_data="acct_email|no")],
+    ])
+    await update.message.reply_text(preview, parse_mode="Markdown", reply_markup=kb)
+
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle file uploads — invoice4u XLS/XLSX (existing flow) + finance P&L updates."""
     doc = update.message.document
@@ -3667,6 +3741,32 @@ async def monthly_report_job(context):
         )
     except Exception as e:
         log.error("monthly_report_job error: %s", e)
+
+
+async def accountant_email_job(context):
+    """Background job — sends accountant email preview on the 5th of each month."""
+    if not TOPAZ_CHAT_ID:
+        return
+    today = datetime.now(IL_TZ)
+    if today.day != 5:
+        return
+    try:
+        month_name = accountant_email.prev_month_name()
+        sess, preview = accountant_email.prepare_preview(month_name)
+        # Store session keyed by TOPAZ_CHAT_ID so the callback can find it
+        sheets_sessions[TOPAZ_CHAT_ID] = {**sess, "step": "acct_email_confirm"}
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✉️ שלח מייל לרואה חשבון", callback_data="acct_email|yes")],
+            [InlineKeyboardButton("❌ ביטול", callback_data="acct_email|no")],
+        ])
+        await context.bot.send_message(
+            chat_id=TOPAZ_CHAT_ID,
+            text=f"📅 *תזכורת חודשית — דוח לרואה חשבון*\n\n{preview}",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    except Exception as e:
+        log.error("accountant_email_job error: %s", e)
 
 
 async def dropout_monitor_job(context):
@@ -4393,6 +4493,20 @@ async def camp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏕 *מחנה קיץ — {stats['total']} ילדים רשומים*",
         parse_mode="Markdown",
         reply_markup=camp_menu_keyboard(),
+    )
+
+
+async def cmd_camp_shirts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/camp_shirts — הזמנות חולצות מחנה"""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 סיכום מידות", callback_data="csh_summary"),
+         InlineKeyboardButton("🔄 סנכרן עם גיליון", callback_data="csh_sync")],
+        [InlineKeyboardButton("❓ מי לא הזמין", callback_data="csh_missing")],
+    ])
+    await update.message.reply_text(
+        "👕 *הזמנות חולצה — מחנה קיץ 2026*",
+        parse_mode="Markdown",
+        reply_markup=kb,
     )
 
 
@@ -7145,6 +7259,8 @@ def main():
     app.add_handler(CommandHandler("update_student", cmd_update_student))
     app.add_handler(CommandHandler("competition", cmd_competition))
     app.add_handler(CommandHandler("update_finances", cmd_update_finances))
+    app.add_handler(CommandHandler("accountant_report", cmd_accountant_report))
+    app.add_handler(CommandHandler("camp_shirts", cmd_camp_shirts))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -7167,6 +7283,7 @@ def main():
         )
         app.job_queue.run_repeating(email_monitor_job,            interval=600,   first=60)
         app.job_queue.run_repeating(monthly_report_job,           interval=86400, first=120)
+        app.job_queue.run_repeating(accountant_email_job,         interval=86400, first=150)
         app.job_queue.run_repeating(dropout_monitor_job,          interval=86400, first=180)
         app.job_queue.run_repeating(daily_training_reminder_job,  interval=86400, first=60)
         app.job_queue.run_repeating(weekly_summary_job,           interval=86400, first=120)
