@@ -5596,6 +5596,25 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+async def camp_shirts_sync_job(context):
+    """Background job — runs every 6 hours. Syncs shirt orders from form to camp sheet."""
+    if not TOPAZ_CHAT_ID:
+        return
+    try:
+        result = camp_shirts.sync_to_camp()
+        if result["updated"]:
+            lines = ["👕 *עדכון הזמנות חולצה — מחנה קיץ*\n"]
+            for u in result["updated"]:
+                lines.append(f"  • {u}")
+            await context.bot.send_message(
+                chat_id=TOPAZ_CHAT_ID,
+                text="\n".join(lines),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        log.error(f"camp_shirts_sync_job error: {e}")
+
+
 async def registration_sync_job(context):
     """Background job — runs every hour. Checks for new event registrations + cleans stale sessions."""
     if not TOPAZ_CHAT_ID:
@@ -7298,6 +7317,7 @@ def main():
 
     if TOPAZ_CHAT_ID and app.job_queue:
         app.job_queue.run_repeating(registration_sync_job,        interval=3600,  first=90)
+        app.job_queue.run_repeating(camp_shirts_sync_job,         interval=21600, first=300)
         # Weekly payment reminder — every Monday 09:00
         from datetime import time as _time
         app.job_queue.run_daily(
