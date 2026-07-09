@@ -5597,8 +5597,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def camp_shirts_sync_job(context):
-    """Background job — runs every 6 hours. Syncs shirt orders from form to camp sheet."""
+    """Background job — runs every 6 hours. Syncs shirt orders from form to camp sheet. Stops after 22/7/2026."""
     if not TOPAZ_CHAT_ID:
+        return
+    from datetime import date as _date
+    if _date.today() > _date(2026, 7, 22):
         return
     try:
         result = camp_shirts.sync_to_camp()
