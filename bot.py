@@ -4384,6 +4384,8 @@ def camp_menu_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton("✏️ עדכן פרטים", callback_data="camp_upd")],
         [InlineKeyboardButton("📧 בדוק מיילים", callback_data="camp_email_sync"),
          InlineKeyboardButton("🎨 עיצב גיליון", callback_data="camp_format")],
+        [InlineKeyboardButton("📅 נוכחות היום", callback_data="camp_attend"),
+         InlineKeyboardButton("👕 חלוקת חולצות", callback_data="camp_shirt_dist")],
     ])
 
 
@@ -5116,6 +5118,65 @@ async def handle_sheets_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return False
 
 
+# ── Camp attendance + shirt helpers ───────────────────────────────────────────
+
+def _camp_attend_keyboard(session: dict) -> InlineKeyboardMarkup:
+    students = session.get('students', [])
+    marks    = session.get('marks', {})
+    rows = []
+    for i, name in enumerate(students):
+        status = marks.get(name, '')
+        icon = '✅' if status == 'V' else ('❌' if status == 'X' else '⬜')
+        short = name[:13] + '..' if len(name) > 15 else name
+        rows.append([InlineKeyboardButton(f"{icon} {short}", callback_data=f"camp_at_{i}")])
+    rows.append([
+        InlineKeyboardButton("💾 שמור", callback_data="camp_at_save"),
+        InlineKeyboardButton("🔙 חזור", callback_data="camp_menu"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _camp_shirts_keyboard(shirts: list) -> InlineKeyboardMarkup:
+    rows = []
+    for i, s in enumerate(shirts):
+        icon = '✅' if s['received'] else '⬜'
+        short = s['name'][:12] + '..' if len(s['name']) > 14 else s['name']
+        rows.append([InlineKeyboardButton(f"{icon} {short} ({s['size']})", callback_data=f"camp_sh_{i}")])
+    rows.append([InlineKeyboardButton("🔙 חזור", callback_data="camp_menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_camp_day(query, user_id: str, day):
+    """Load attendance for a camp day and show the keyboard."""
+    await query.edit_message_text("⏳ טוען נוכחות...")
+    # setup_attendance_tab is idempotent — creates only if tab is empty
+    try:
+        camp.setup_attendance_tab()
+    except Exception as e:
+        await query.edit_message_text(f"❌ שגיאה ביצירת טאב נוכחות: {e}",
+                                       reply_markup=camp_menu_keyboard())
+        return
+    marks = camp.get_attendance(day)
+    students = [s['name'] for s in sorted(camp.get_students(),
+                key=lambda r: (camp.GRADE_ORDER.get(r['grade'], 99), r['name']))]
+    session = {
+        'mode': 'camp_attend',
+        'day': day.strftime('%Y%m%d'),
+        'students': students,
+        'marks': marks,
+    }
+    sheets_sessions[user_id] = session
+    n_present = sum(1 for v in marks.values() if v == 'V')
+    n_absent  = sum(1 for v in marks.values() if v == 'X')
+    day_label = f"{day.day}/{day.month}/{day.year}"
+    await query.edit_message_text(
+        f"📅 *נוכחות מחנה — {day_label}*\n"
+        f"✅ {n_present} | ❌ {n_absent} | ⬜ {len(students) - n_present - n_absent}",
+        parse_mode="Markdown",
+        reply_markup=_camp_attend_keyboard(session),
+    )
+
+
 async def handle_sheets_callback(query, user_id: str, action: str, context) -> bool:
     """Handle camp_* and lyla_* callbacks. Returns True if consumed."""
     await query.answer()
@@ -5277,6 +5338,136 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
         ss = sheets_sessions.pop(user_id, {})
         camp.update_student(ss.get('target', ''), 'notes', week)
         await query.edit_message_text(f"✅ עודכן — שבוע: {week}", reply_markup=camp_menu_keyboard())
+        return True
+
+    # ── Camp menu back button ──
+    if action == 'camp_menu':
+        await query.edit_message_text("🏕 *מחנה קיץ*", parse_mode="Markdown",
+                                       reply_markup=camp_menu_keyboard())
+        return True
+
+    # ── Camp attendance ──
+    if action == 'camp_attend':
+        from datetime import date as _date
+        today = _date.today()
+        camp_days = camp.get_camp_days()
+        if today in camp_days:
+            await _show_camp_day(query, user_id, today)
+        else:
+            buttons = [
+                InlineKeyboardButton(f"{d.day}/{d.month}",
+                                     callback_data=f"camp_at_date_{d.strftime('%Y%m%d')}")
+                for d in camp_days
+            ]
+            kb_rows = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
+            kb_rows.append([InlineKeyboardButton("🔙 חזור", callback_data="camp_menu")])
+            await query.edit_message_text("📅 *בחר תאריך נוכחות:*", parse_mode="Markdown",
+                                           reply_markup=InlineKeyboardMarkup(kb_rows))
+        return True
+
+    if action.startswith('camp_at_date_'):
+        from datetime import date as _date
+        d_str = action[len('camp_at_date_'):]
+        d = _date(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:]))
+        await _show_camp_day(query, user_id, d)
+        return True
+
+    if action == 'camp_at_save':
+        ss = sheets_sessions.pop(user_id, {})
+        day_str = ss.get('day', '')
+        if not day_str:
+            await query.edit_message_text("❌ שגיאה: אין תאריך בסשן.", reply_markup=camp_menu_keyboard())
+            return True
+        marks = ss.get('marks', {})
+        from datetime import date as _date
+        day = _date(int(day_str[:4]), int(day_str[4:6]), int(day_str[6:]))
+        await query.edit_message_text("⏳ שומר נוכחות...")
+        try:
+            camp.save_attendance_batch(day, marks)
+            n_present = sum(1 for v in marks.values() if v == 'V')
+            n_absent  = sum(1 for v in marks.values() if v == 'X')
+            await query.edit_message_text(
+                f"✅ נוכחות נשמרה — {day.day}/{day.month}\n✅ {n_present} | ❌ {n_absent}",
+                reply_markup=camp_menu_keyboard(),
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=camp_menu_keyboard())
+        return True
+
+    if (action.startswith('camp_at_')
+            and not action.startswith('camp_at_date_')
+            and action != 'camp_at_save'):
+        try:
+            idx = int(action[len('camp_at_'):])
+        except ValueError:
+            return False
+        ss = sheets_sessions.get(user_id, {})
+        if ss.get('mode') != 'camp_attend':
+            return False
+        students = ss.get('students', [])
+        marks    = ss.get('marks', {})
+        if idx < 0 or idx >= len(students):
+            return False
+        name = students[idx]
+        cur  = marks.get(name, '')
+        marks[name] = 'V' if cur == '' else ('X' if cur == 'V' else '')
+        ss['marks'] = marks
+        sheets_sessions[user_id] = ss
+        from datetime import date as _date
+        day_str = ss.get('day', '')
+        day = _date(int(day_str[:4]), int(day_str[4:6]), int(day_str[6:]))
+        n_present = sum(1 for v in marks.values() if v == 'V')
+        n_absent  = sum(1 for v in marks.values() if v == 'X')
+        await query.edit_message_text(
+            f"📅 *נוכחות מחנה — {day.day}/{day.month}/{day.year}*\n"
+            f"✅ {n_present} | ❌ {n_absent} | ⬜ {len(students) - n_present - n_absent}",
+            parse_mode="Markdown",
+            reply_markup=_camp_attend_keyboard(ss),
+        )
+        return True
+
+    # ── Camp shirt distribution ──
+    if action == 'camp_shirt_dist':
+        await query.edit_message_text("⏳ טוען סטטוס חולצות...")
+        try:
+            shirts = camp.get_shirt_status()
+            sheets_sessions[user_id] = {'mode': 'camp_shirts', 'shirts': shirts}
+            n_received = sum(1 for s in shirts if s['received'])
+            await query.edit_message_text(
+                f"👕 *חלוקת חולצות מחנה*\nקיבלו: *{n_received}/{len(shirts)}*\n"
+                f"לחץ על שם לסימון קיבל ✓",
+                parse_mode="Markdown",
+                reply_markup=_camp_shirts_keyboard(shirts),
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=camp_menu_keyboard())
+        return True
+
+    if action.startswith('camp_sh_'):
+        try:
+            idx = int(action[len('camp_sh_'):])
+        except ValueError:
+            return False
+        ss = sheets_sessions.get(user_id, {})
+        shirts = ss.get('shirts', [])
+        if idx < 0 or idx >= len(shirts):
+            return False
+        entry  = shirts[idx]
+        new_val = '' if entry['received'] else '✓'
+        try:
+            camp.mark_shirt_received(entry['name'], new_val)
+            shirts[idx]['received'] = new_val
+            ss['shirts'] = shirts
+            sheets_sessions[user_id] = ss
+            n_received = sum(1 for s in shirts if s['received'])
+            await query.edit_message_text(
+                f"👕 *חלוקת חולצות מחנה*\nקיבלו: *{n_received}/{len(shirts)}*\n"
+                f"לחץ על שם לסימון קיבל ✓",
+                parse_mode="Markdown",
+                reply_markup=_camp_shirts_keyboard(shirts),
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ שגיאה: {e}", reply_markup=camp_menu_keyboard())
         return True
 
     # ── Lyla main menu actions ──
