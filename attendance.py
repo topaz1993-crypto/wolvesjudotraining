@@ -136,8 +136,14 @@ def get_schedule_by_offset(offset: int = 0) -> list[tuple[str, str, str]]:
 def _get_service():
     # Support both local pickle and base64 env var (for Render)
     b64 = os.environ.get("GOOGLE_CREDS_B64")
-    if b64:
-        creds = pickle.loads(base64.b64decode(b64 + "=="))
+    if b64 and len(b64) > 100:  # Base64 should be at least 100+ chars
+        try:
+            creds = pickle.loads(base64.b64decode(b64 + "=="))
+        except Exception:
+            # Fall back to pickle file if base64 fails
+            pickle_path = os.path.expanduser("~/token.pickle")
+            with open(pickle_path, "rb") as f:
+                creds = pickle.load(f)
     else:
         pickle_path = os.path.expanduser("~/token.pickle")
         with open(pickle_path, "rb") as f:
