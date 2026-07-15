@@ -27,7 +27,7 @@ def _get_service():
         creds = pickle.loads(base64.b64decode(b64 + "=="))
     else:
         import glob
-        p = os.path.expanduser("~/.wolves_judo_token.pickle")
+        p = os.path.expanduser("~/token.pickle")
         with open(p, "rb") as f:
             creds = pickle.load(f)
     from googleapiclient.discovery import build

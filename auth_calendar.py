@@ -12,7 +12,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar",
 ]
 
-TOKEN_PATH = os.path.expanduser("~/.wolves_judo_token.pickle")
+TOKEN_PATH = os.path.expanduser("~/token.pickle")
 CREDS_PATH = os.path.expanduser("~/wolves_credentials.json")
 
 creds = None

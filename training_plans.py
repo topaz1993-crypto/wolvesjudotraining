@@ -72,7 +72,7 @@ def _get_service():
     if b64:
         creds = pickle.loads(base64.b64decode(b64 + "=="))
     else:
-        with open(os.path.expanduser("~/.wolves_judo_token.pickle"), "rb") as f:
+        with open(os.path.expanduser("~/token.pickle"), "rb") as f:
             creds = pickle.load(f)
     return googleapiclient.discovery.build("sheets", "v4", credentials=creds)
 

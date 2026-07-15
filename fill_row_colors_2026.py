@@ -16,7 +16,7 @@ WHITE = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
 
 
 def get_service():
-    with open(os.path.expanduser("~/.wolves_judo_token.pickle"), "rb") as f:
+    with open(os.path.expanduser("~/token.pickle"), "rb") as f:
         creds = pickle.load(f)
     return googleapiclient.discovery.build("sheets", "v4", credentials=creds)
 

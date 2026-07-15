@@ -37,7 +37,7 @@ DARK      = c(0.10, 0.12, 0.18)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def get_service():
-    with open(os.path.expanduser("~/.wolves_judo_token.pickle"), "rb") as f:
+    with open(os.path.expanduser("~/token.pickle"), "rb") as f:
         creds = pickle.load(f)
     return googleapiclient.discovery.build("sheets", "v4", credentials=creds)
 
