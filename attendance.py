@@ -140,15 +140,23 @@ def _get_service():
         try:
             creds = pickle.loads(base64.b64decode(b64 + "=="))
         except Exception:
-            # Fall back to pickle file if base64 fails
-            pickle_path = os.path.expanduser("~/token.pickle")
-            with open(pickle_path, "rb") as f:
-                creds = pickle.load(f)
-    else:
-        pickle_path = os.path.expanduser("~/token.pickle")
-        with open(pickle_path, "rb") as f:
-            creds = pickle.load(f)
-    return googleapiclient.discovery.build("sheets", "v4", credentials=creds)
+            pass  # Fall through to pickle file
+
+    # Try pickle file (local or Render /data)
+    for pickle_path in [
+        os.path.expanduser("~/token.pickle"),  # Local
+        "/data/token.pickle",  # Render persistent disk
+        "/var/data/token.pickle",  # Alternative Render path
+    ]:
+        if os.path.exists(pickle_path):
+            try:
+                with open(pickle_path, "rb") as f:
+                    creds = pickle.load(f)
+                return googleapiclient.discovery.build("sheets", "v4", credentials=creds)
+            except Exception:
+                continue
+
+    raise FileNotFoundError("token.pickle not found in any expected location")
 
 
 def resolve_branch_group(text: str):

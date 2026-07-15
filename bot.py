@@ -68,6 +68,24 @@ PENDING_FILE     = _DATA_DIR / "pending_plans.json"
 CORRECTIONS_FILE = _DATA_DIR / "corrections.txt"
 WA_FAVORITES_FILE = _DATA_DIR / "wa_favorite_groups.json"
 
+# Initialize Google credentials in /data if needed (Render)
+def _init_google_creds():
+    import base64
+    import pickle
+    token_path = _DATA_DIR / "token.pickle"
+    if not token_path.exists():
+        b64 = os.environ.get("GOOGLE_CREDS_B64")
+        if b64 and len(b64) > 100:
+            try:
+                creds = pickle.loads(base64.b64decode(b64 + "=="))
+                with open(token_path, "wb") as f:
+                    pickle.dump(creds, f)
+                log.info("✅ Loaded Google credentials from GOOGLE_CREDS_B64")
+            except Exception as e:
+                log.warning(f"⚠️ Failed to decode GOOGLE_CREDS_B64: {e}")
+
+_init_google_creds()
+
 contacts_db.set_data_dir(_DATA_DIR)
 abt.set_data_dir(_DATA_DIR)
 att.set_data_dir(_DATA_DIR)
