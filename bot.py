@@ -3443,7 +3443,7 @@ async def _plan_wizard_save(message, user_id: str, ss: dict):
 
 # ── Gmail helpers ─────────────────────────────────────────────────────────────
 
-def gmail_send(to: str, subject: str, body: str, attachments: list[str] | None = None):
+def gmail_send(to: str, subject: str, body: str, attachments: Optional[list] = None):
     """Send email via Gmail SMTP using App Password."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
