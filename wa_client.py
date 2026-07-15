@@ -9,6 +9,7 @@ import logging
 import subprocess
 import threading
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def get_status() -> dict:
         return {"connected": False, "status": "bridge_offline", "has_qr": False}
 
 
-def get_qr_base64() -> str | None:
+def get_qr_base64() -> Optional[str]:
     httpx = _get_http()
     if not httpx:
         return None

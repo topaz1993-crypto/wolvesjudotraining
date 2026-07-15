@@ -128,6 +128,38 @@ def update_student(name, field, value):
     return False
 
 
+def delete_student(name):
+    """מוחק רשום לפי שם."""
+    service = _get_service()
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    sheet_id = next(s['properties']['sheetId'] for s in meta['sheets']
+                    if s['properties']['title'] == SHEET_NAME)
+
+    rows = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID, range=f'{SHEET_NAME}!A1:G80'
+    ).execute().get('values', [])
+
+    for i, row in enumerate(rows[1:], 1):  # 0-indexed (body rows start at 1), skip header
+        if row and row[0].strip() == name:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={
+                    'requests': [{
+                        'deleteDimension': {
+                            'range': {
+                                'sheetId': sheet_id,
+                                'dimension': 'ROWS',
+                                'startIndex': i,
+                                'endIndex': i + 1
+                            }
+                        }
+                    }]
+                }
+            ).execute()
+            return True
+    return False
+
+
 def format_sheet():
     service = _get_service()
     meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
@@ -435,6 +467,42 @@ def get_shirt_status() -> list:
         received = row[4].strip() if len(row) > 4 else ''
         result.append({'name': name, 'size': size, 'received': received})
     return result
+
+
+def add_instructor_shirt(name: str, size: str) -> bool:
+    """הוסף חולצה למדריך בסעיף מדריכים."""
+    service = _get_service()
+    rows = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID, range=f'{SHIRTS_TAB}!A1:E80'
+    ).execute().get('values', [])
+
+    # Find "👕 מדריכים" section and get size column
+    instructor_start = None
+    size_col = None
+    for i, row in enumerate(rows):
+        if row and '👕 מדריכים' in row[0]:
+            instructor_start = i + 1  # next row is header
+            if instructor_start < len(rows):
+                header_row = rows[instructor_start]
+                cols = [c.strip() for c in header_row] if header_row else []
+                size_col = cols.index('מידה') if 'מידה' in cols else None
+            break
+
+    if instructor_start is None or size_col is None:
+        return False
+
+    # Find first empty row after header in instructor section
+    for i in range(instructor_start + 1, len(rows)):
+        if not rows[i] or (rows[i] and not rows[i][0].strip()):
+            # Insert here
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f'{SHIRTS_TAB}!A{i + 1}:E{i + 1}',
+                valueInputOption='RAW',
+                body={'values': [[name, '', '', size, '']]}
+            ).execute()
+            return True
+    return False
 
 
 def mark_shirt_received(name: str, value: str = '✓') -> bool:

@@ -8,6 +8,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import anthropic
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6124,7 +6125,7 @@ async def weekly_summary_job(context):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _search_student_everywhere(name: str) -> dict | None:
+def _search_student_everywhere(name: str) -> Optional[dict]:
     """
     מחפש ספורטאי לפי שם בכל המקורות:
     payments_report → lyla_sheet → camp_sheet → attendance sheets.
@@ -7283,7 +7284,7 @@ async def wa_send_with_approval(
 
 
 
-def _fuzzy_name_match(name: str, existing: set, cutoff: float = 0.82) -> str | None:
+def _fuzzy_name_match(name: str, existing: set, cutoff: float = 0.82) -> Optional[str]:
     """Return the best match from existing for name, or None if below cutoff."""
     from difflib import get_close_matches
     matches = get_close_matches(name, existing, n=1, cutoff=cutoff)

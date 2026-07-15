@@ -296,7 +296,7 @@ def get_parent_for_student(athlete_name: str, branch: str = None) -> dict:
 # Verified cache — contacts matched to real students
 # ──────────────────────────────────────────────
 
-_VERIFIED_FILE: Path | None = None
+_VERIFIED_FILE: Optional[Path] = None
 
 
 def set_data_dir(data_dir: Path):

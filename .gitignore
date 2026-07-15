@@ -7,3 +7,5 @@ __pycache__/
 *.pyc
 start.sh
 .env
+credentials.json
+credentials.json
