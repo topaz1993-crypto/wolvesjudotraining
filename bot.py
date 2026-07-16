@@ -141,6 +141,8 @@ training_log: dict = load_json(LOG_FILE, {})
 pending_plans: dict[str, str] = load_json(PENDING_FILE, {})
 # attendance_sessions[user_id] = active attendance session dict
 attendance_sessions: dict[str, dict] = {}
+# lyla_sessions[user_id] = active Lyla attendance session dict
+lyla_sessions: dict[str, dict] = {}
 # pending_payments[key] = {student, month, amount, email_id, subject, sender}
 pending_payments: dict[str, dict] = {}
 # pending_competitions[user_id] = {tab, names} — bulk add awaiting confirmation
@@ -4533,12 +4535,9 @@ async def cmd_camp_shirts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def lyla_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = lyla.get_stats()
-    await update.message.reply_text(
-        f"🌸 *לילה יפני — {stats['total']} משתתפים*",
-        parse_mode="Markdown",
-        reply_markup=lyla_menu_keyboard(),
-    )
+    user_id = str(update.effective_user.id)
+    chat_id = str(update.effective_chat.id)
+    await start_lyla_session(context.bot, chat_id, user_id)
 
 
 async def cmd_competition(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5695,6 +5694,52 @@ async def handle_sheets_callback(query, user_id: str, action: str, context) -> b
     if action == 'comp_cancel':
         sheets_sessions.pop(user_id, None)
         await query.edit_message_text("❌ בוטל.")
+        return True
+
+    # ── Lyla attendance callbacks ──
+    if action.startswith("lyla_toggle_"):
+        session = lyla_sessions.get(user_id)
+        if not session:
+            await query.answer("אין סשן לילה יפני פעיל")
+            return True
+        idx = int(action.split("_")[-1])
+        absent = session["absent"]
+        if idx in absent:
+            absent.discard(idx)
+        else:
+            absent.add(idx)
+        await query.edit_message_reply_markup(reply_markup=lyla_attendance_keyboard(session))
+        await query.answer()
+        return True
+
+    if action == "lyla_cancel":
+        if user_id in lyla_sessions:
+            del lyla_sessions[user_id]
+        await query.edit_message_text("↩️ נוכחות בוטלה")
+        await query.answer()
+        return True
+
+    if action == "lyla_save":
+        session = lyla_sessions.get(user_id)
+        if not session:
+            await query.answer("אין סשן לילה יפני פעיל")
+            return True
+        await query.answer("שומר...")
+        absent = session["absent"]
+        students = session["students"]
+        try:
+            lyla.mark_lyla_attendance(session, absent)
+            del lyla_sessions[user_id]
+            present_names = [name for i, (_, name) in enumerate(students, 1) if i not in absent]
+            absent_names = [name for i, (_, name) in enumerate(students, 1) if i in absent]
+            msg = f"✅ *לילה יפני — {session['date']}*\n"
+            msg += f"🟢 הגיעו ({len(present_names)}): {', '.join(present_names) or '—'}\n"
+            if absent_names:
+                msg += f"🔴 נעדרו ({len(absent_names)}): {', '.join(absent_names)}\n"
+            await query.edit_message_text(msg, parse_mode="Markdown")
+        except Exception as e:
+            log.error(f"Lyla save error: {e}")
+            await query.edit_message_text(f"❌ שגיאה בשמירה: {e}")
         return True
 
     return False
@@ -7553,6 +7598,84 @@ def main():
     log.info("Bot started...")
     app.run_polling()
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LYLA (לילה יפני) — Attendance Tracking
+# ═══════════════════════════════════════════════════════════════════════════
+
+def lyla_attendance_keyboard(session: dict) -> InlineKeyboardMarkup:
+    students = session["students"]
+    absent = session.get("absent", set())
+
+    buttons = []
+    for i, (row, name) in enumerate(students, 1):
+        status = "🔴" if i in absent else "🟢"
+        btn = InlineKeyboardButton(f"{status} {name}", callback_data=f"lyla_toggle_{i}")
+        buttons.append([btn])
+
+    buttons.append([InlineKeyboardButton("✅ שמור", callback_data="lyla_save")])
+    buttons.append([InlineKeyboardButton("↩️ ביטול", callback_data="lyla_cancel")])
+    return InlineKeyboardMarkup(buttons)
+
+async def start_lyla_session(bot, chat_id: str, user_id: str):
+    try:
+        session = lyla.prepare_lyla_attendance()
+        session["absent"] = set()
+        lyla_sessions[user_id] = session
+
+        msg = f"📋 *לילה יפני — {session['date']}*\n\nלחץ על שם להחליף נוכחות 🟢/🔴\nבסוף לחץ *שמור*"
+        await bot.send_message(
+            chat_id=chat_id,
+            text=msg,
+            parse_mode="Markdown",
+            reply_markup=lyla_attendance_keyboard(session)
+        )
+    except Exception as e:
+        log.error(f"Lyla session error: {e}")
+        await bot.send_message(chat_id=chat_id, text=f"❌ שגיאה בטעינת הרשימה: {e}")
+
+async def handle_lyla_callback(query, user_id: str, action: str, context):
+    session = lyla_sessions.get(user_id)
+    if not session:
+        await query.answer("אין סשן לילה יפני פעיל")
+        return
+
+    if action.startswith("lyla_toggle_"):
+        idx = int(action.split("_")[-1])
+        absent = session["absent"]
+        if idx in absent:
+            absent.discard(idx)
+        else:
+            absent.add(idx)
+        await query.edit_message_reply_markup(reply_markup=lyla_attendance_keyboard(session))
+        await query.answer()
+
+    elif action == "lyla_cancel":
+        del lyla_sessions[user_id]
+        await query.edit_message_text("↩️ נוכחות בוטלה")
+        await query.answer()
+
+    elif action == "lyla_save":
+        await query.answer("שומר...")
+        absent = session["absent"]
+        students = session["students"]
+
+        try:
+            lyla.mark_lyla_attendance(session, absent)
+            del lyla_sessions[user_id]
+
+            present_names = [name for i, (_, name) in enumerate(students, 1) if i not in absent]
+            absent_names = [name for i, (_, name) in enumerate(students, 1) if i in absent]
+
+            msg = f"✅ *לילה יפני — {session['date']}*\n"
+            msg += f"🟢 הגיעו ({len(present_names)}): {', '.join(present_names) or '—'}\n"
+            if absent_names:
+                msg += f"🔴 נעדרו ({len(absent_names)}): {', '.join(absent_names)}\n"
+
+            await query.edit_message_text(msg, parse_mode="Markdown")
+        except Exception as e:
+            log.error(f"Lyla save error: {e}")
+            await query.edit_message_text(f"❌ שגיאה בשמירה: {e}")
 
 if __name__ == "__main__":
     main()

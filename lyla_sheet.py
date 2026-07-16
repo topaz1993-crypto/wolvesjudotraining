@@ -291,6 +291,51 @@ def add_from_csv(csv_path: str):
     return new_entries, duplicates
 
 
+def prepare_lyla_attendance() -> dict:
+    """Prepare session dict with all current Lyla participants for attendance marking."""
+    from datetime import date
+    students = get_students()
+    session = {
+        'date': str(date.today()),
+        'students': [(i+1, s['name']) for i, s in enumerate(students)],
+        'absent': set(),
+    }
+    return session
+
+
+def mark_lyla_attendance(session: dict, absent_indices: set):
+    """Mark attendance in Lyla sheet. absent_indices = set of 1-based row numbers."""
+    service = _get_service()
+    sheet_id = _get_sheet_id(service)
+
+    students = session['students']
+    green = {'red': 0, 'green': 1, 'blue': 0}
+    red = {'red': 1, 'green': 0, 'blue': 0}
+
+    req = []
+    for i, (row_num, name) in enumerate(students, 1):
+        color = red if i in absent_indices else green
+        req.append({
+            'repeatCell': {
+                'range': {
+                    'sheetId': sheet_id,
+                    'startRowIndex': row_num,
+                    'endRowIndex': row_num + 1,
+                    'startColumnIndex': 4,
+                    'endColumnIndex': 5,
+                },
+                'cell': {'userEnteredFormat': {'backgroundColor': color}},
+                'fields': 'userEnteredFormat.backgroundColor',
+            }
+        })
+
+    if req:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'requests': req}
+        ).execute()
+
+
 if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1:

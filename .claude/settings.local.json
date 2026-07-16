@@ -95,7 +95,13 @@
       "Bash(python3 /private/tmp/claude-501/-Users-topaz-clode/ae9722d6-39b9-4253-a0ff-fa683f1786d3/scratchpad/patch.py)",
       "Bash(find /private/tmp /var/folders -name \"*.png\" -newer /Users/topaz/Desktop/index.html 2>/dev/null | head -10 *)",
       "Bash(python3 auth_google.py)",
-      "Bash(python3 -c \"import bot; print\\('✅ bot.py imports OK'\\)\")"
+      "Bash(python3 -c \"import bot; print\\('✅ bot.py imports OK'\\)\")",
+      "Bash(markitdown \"/Users/topaz/Desktop/התחשבנות גודו יוני.xlsx\")",
+      "Bash(awk -F: 'NR>=1 && NR<=50 && $1>5198 && $1<5700')",
+      "Bash(awk 'NR>=5198 && NR<=5700 && /return False/ {print NR\": \"$0; exit}' ~/clode/bot.py)",
+      "Bash(awk '/^async def handle_sheets_callback/,/^async def [a-zA-Z_]/ {print NR\": \"$0}' ~/clode/bot.py)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/topaz/clode/bot.py'\\).read\\(\\)\\); print\\('✅ bot.py syntax OK'\\)\")",
+      "Bash(python3 -c \"import lyla_sheet; print\\('✅ lyla_sheet.py OK'\\)\")"
     ]
   }
 }
