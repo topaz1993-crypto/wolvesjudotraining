@@ -4,13 +4,30 @@ Sheet ID: 1hi073ueyzdzEjzhP6a3ZgTPpeZDNzH2g2rKPj-L8a6I
 Structure: row1 = headers (שעה, קבוצה, date1, date2...), then group blocks with content rows.
 """
 
-import os, pickle, base64, warnings, json
+import os, pickle, base64, warnings, json, sys
 from datetime import date as date_cls
+from pathlib import Path
 warnings.filterwarnings("ignore")
 import googleapiclient.discovery
 import anthropic
 
 _claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+# ── Logging ──
+_LOG_FILE = Path(os.path.expanduser("~/logs")) / "training_plans_sync.log"
+_LOG_FILE.parent.mkdir(exist_ok=True)
+
+def _log(msg: str):
+    """Log to file and print."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {msg}"
+    try:
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except:
+        pass
+    print(line, file=sys.stderr)
 
 # Row types in order — maps to the 6 rows of each group block in the sheet
 ROW_TYPES = ["חימום", "תרגול", "קרבות", "משחק", "כוח", "נוסף"]
@@ -615,6 +632,8 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
     col_0 = _find_or_create_date_col(service, tab_name, plan_date)
     col_letter = _col_letter(col_0)
 
+    _log(f"    > קבוצה: {group} | טאב: {tab_name} | תא: {col_letter}")
+
     rows = _read_tab(service, tab_name)
     all_group_rows = _find_group_rows_for_group(rows, group)
 
@@ -634,26 +653,34 @@ def save_plan_to_sheet(branch: str, group: str, plan_date, plan_items: list[str]
             "range": f"'{tab_name}'!{col_letter}{row_1}",
             "values": [[item]]
         })
+        _log(f"      שורה {row_1}: {ROW_TYPES[i] if i < len(ROW_TYPES) else '?'} = {item[:30]}...")
 
     if updates:
         service.spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": "RAW", "data": updates}
         ).execute()
+        _log(f"      ✓ {len(updates)} תאים עודכנו בגיליון")
 
     # Refresh design after save
-    design_tab(service, tab_name, sheet_id, delete_empty=False)
+    try:
+        design_tab(service, tab_name, sheet_id, delete_empty=False)
+        _log(f"      ✓ עיצוב רענן")
+    except Exception as e:
+        _log(f"      ⚠ עיצוב לא רענן: {e}")
 
     # Save to archive
     try:
         import training_archive as _arc
-        content = {ROW_TYPES[i]: mapped[i] for i in range(len(mapped)) if i < len(ROW_TYPES) and mapped[i]}  # noqa: mapped refers to content_rows mapping
+        content = {ROW_TYPES[i]: mapped[i] for i in range(len(mapped)) if i < len(ROW_TYPES) and mapped[i]}
         _arc.save_plan(branch, tab_name, group, plan_date.isoformat(), content)
-    except Exception:
-        pass
+        _log(f"      ✓ ארכיון שמור")
+    except Exception as e:
+        _log(f"      ⚠ ארכיון לא שמור: {e}")
 
     date_str = f"{plan_date.day}/{plan_date.month}"
-    return f"✅ נשמר בגיליון {tab_name} — {group} — {date_str} ({len(updates)} שורות)"
+    summary = f"✅ נשמר בגיליון {tab_name} — {group} — {date_str} ({len(updates)} שורות)"
+    return summary
 
 
 def save_multigroup_plan(branch: str, plan_date, groups: list[dict]) -> str:
@@ -871,32 +898,52 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
     Save a full training day plan for a branch.
     Automatically finds all groups for that branch+day from the schedule,
     splits the plan_text among them, and saves each to its correct sheet block.
-    Returns a summary string.
+    Returns a summary string with full logging.
     """
     import weekly_schedule as _ws
+    from datetime import date as _date_cls
+
+    # Convert to date_cls if needed
+    if not isinstance(plan_date, _date_cls):
+        if isinstance(plan_date, str):
+            plan_date = _date_cls.fromisoformat(plan_date)
+
+    _log(f"🟢 START: save_full_day({branch}, {plan_date})")
+
+    # Validate branch
+    if branch not in BRANCH_TABS:
+        err = f"❌ סניף לא מוכר: {branch}"
+        _log(err)
+        raise ValueError(err)
 
     # Get groups for this branch on this day (from schedule)
     sched_groups = _ws.groups_for_branch_on_date(branch, plan_date)
     if not sched_groups:
-        return f"⚠️ לא מוגדרות קבוצות ל-{branch} ביום הזה"
+        warn = f"⚠️ לא מוגדרות קבוצות ל-{branch} ביום {plan_date.strftime('%A %d/%m')}"
+        _log(warn)
+        return warn
+
+    _log(f"  קבוצות בתוכנית: {', '.join([g['name'] for g in sched_groups])}")
+
+    # Validate that all groups in schedule are valid (not a day they shouldn't be)
+    # (This check is informational — the schedule already defines what's valid)
 
     # Parse the plan text into sections, one per group
-    # Strategy: split by group markers (⏰, 👥, "קבוצה X:", time patterns, or "---")
     sections = _split_plan_into_sections(plan_text, sched_groups)
 
     service = _get_service()
     tab_name = BRANCH_TABS.get(branch)
-    if not tab_name:
-        raise ValueError(f"סניף לא מוכר: {branch}")
     sheet_id = _get_sheet_id(service, tab_name)
 
+    _log(f"  טאב בגיליון: '{tab_name}' (ID: {sheet_id})")
+
     # If the plan only labeled ONE group, spread its content to all other groups too.
-    # (Common case: פונקציונלי/נבחרת where all groups train the same program.)
     groups_with_content = [items for _, items in sections if items]
     fallback_items = groups_with_content[0] if len(groups_with_content) == 1 else []
 
     results = []
     saved_any = False
+
     for group_info, items in sections:
         group_name = group_info["name"]
 
@@ -905,25 +952,38 @@ def save_full_day(branch: str, plan_date, plan_text: str) -> str:
             try:
                 save_plan_to_sheet(branch, group_name, plan_date, ["בוטל"])
                 results.append(f"🚫 {group_name}: בוטל")
+                _log(f"  ✓ שמרתי: {group_name} = בוטל")
                 saved_any = True
             except Exception as e:
                 results.append(f"⚠️ {group_name}: לא נכתב (בוטל) — {e}")
+                _log(f"  ✗ שגיאה בשמירה {group_name}: {e}")
             continue
 
         effective_items = items if items else fallback_items
         if not effective_items:
             results.append(f"⚠️ {group_name}: אין תוכן")
+            _log(f"  ⚠ {group_name}: אין תוכן")
             continue
+
         try:
             save_plan_to_sheet(branch, group_name, plan_date, effective_items)
             results.append(f"✅ {group_name}")
+            _log(f"  ✓ שמרתי: {group_name} ({len(effective_items)} שורות)")
             saved_any = True
         except ValueError as e:
             results.append(f"⚠️ {group_name}: {e}")
+            _log(f"  ✗ {group_name}: {e}")
         except Exception as e:
             results.append(f"❌ {group_name}: {e}")
+            _log(f"  ❌ {group_name}: {type(e).__name__}: {e}")
 
-    return "\n".join(results)
+    summary = "\n".join(results)
+    if saved_any:
+        _log(f"🟢 SUCCESS: שמרתי תוכנית לגיליון")
+    else:
+        _log(f"🔴 PARTIAL: לא הצליח לשמור שום קבוצה")
+    _log("=" * 60)
+    return summary
 
 
 def clear_plan_from_sheet(branch: str, plan_date) -> str:

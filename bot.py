@@ -228,6 +228,83 @@ PLAN_GROUPS = {
     "נבחרת":      ["נבחרת"],
 }
 
+# ⚠️ חשוב: איזה קבוצה מתאמנת באיזה יום בכל סניף
+# Python weekday: 0=שני, 1=שלישי, 2=רביעי, 3=חמישי, 4=שישי, 5=שבת, 6=ראשון
+GROUPS_BY_DAY = {
+    "סירקין": {
+        0: ["ד-ו", "ג", "א-ב", "ז-בוגרים"],  # שני — ללא גנים!
+        2: ["ד-ו", "ג", "א-ב", "ז-בוגרים"],  # רביעי — אין סירקין
+        3: ["ד-ו", "ג", "א-ב", "גן חובה", "ז-בוגרים"],  # חמישי — עם גנים
+        4: [],  # שישי — נבחרת בלבד, לא גדולים
+        6: [],  # ראשון — אין סירקין
+    },
+    "חגור": {
+        6: ["ד-ח", "א-ג", "גנים"],  # ראשון
+    },
+    "נווה ירק": {
+        1: ["גנים", "ג-ו", "א-ב"],  # שלישי
+        6: ["ז-בוגרים", "ג-ו", "א-ב"],  # ראשון
+    },
+    "אהרונוביץ": {
+        2: ["א-ה"],  # רביעי (בבית הספר)
+    },
+    "איפון פייט": {
+        0: ["ב-ד", "ה-ז"],  # שני
+        2: ["ב-ד", "ה-ז"],  # רביעי
+    },
+    "פונקציונלי": {
+        0: ["ז-ח", 'ט-י"ב'],  # שני
+        2: ["ז-ח", 'ט-י"ב'],  # רביעי
+        4: ["ז-ח", 'ט-י"ב'],  # שישי
+    },
+    "נבחרת": {
+        4: ["נבחרת"],  # שישי
+    },
+}
+
+def is_group_valid_for_day(branch: str, group: str, date_obj) -> bool:
+    """בדוק אם קבוצה מתאמנת באותו יום בסניף זה."""
+    if branch not in GROUPS_BY_DAY:
+        return True  # סניף לא מוגדר, בואי נתן לא לחסום
+    weekday = date_obj.weekday()
+    valid_groups = GROUPS_BY_DAY[branch].get(weekday, [])
+    return group in valid_groups
+
+def _validate_plan_groups(branch: str, plan_text: str, plan_date) -> tuple[bool, list[str]]:
+    """בדוק אם כל הקבוצות בתוכנית תקינות ליום זה בסניף זה.
+    מחזיר: (is_valid, list_of_warnings)
+    """
+    import re
+    warnings = []
+
+    if branch not in GROUPS_BY_DAY:
+        return True, []  # סניף לא מוגדר, זה בסדר
+
+    weekday = plan_date.weekday()
+    valid_groups = GROUPS_BY_DAY[branch].get(weekday, [])
+
+    # חפש שמות קבוצות בתוכנית
+    # חיפוש לפי: "קבוצה:", "ד-ו:", "א-ב:" וכו'
+    group_patterns = [
+        r'([א-ת]+-[א-ת]+|[א-ת]+)',  # קבוצות עברית
+    ]
+
+    mentioned_groups = set()
+    for group in PLAN_GROUPS.get(branch, []):
+        if re.search(rf'\b{re.escape(group)}\b', plan_text, re.IGNORECASE):
+            mentioned_groups.add(group)
+
+    # בדוק אם הקבוצות המוזכרות תקינות
+    for group in mentioned_groups:
+        if group not in valid_groups:
+            day_name = ws.day_name(plan_date)
+            warnings.append(
+                f"⚠️ **{group}** לא מתאמנת ב-{branch} ביום {day_name}!\n"
+                f"קבוצות שמתאמנות: {', '.join(valid_groups) if valid_groups else 'אף אחת'}"
+            )
+
+    return len(warnings) == 0, warnings
+
 def _branch_buttons(active_callback_prefix: str = "mg_branch") -> list:
     """Return branch button rows with next training day marker."""
     from datetime import date as _d, timedelta as _td
@@ -276,6 +353,15 @@ async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_da
         sheets_sessions[user_id] = {**ss, "branch": branch, "step": "mg_pick_date",
                                      "plan_date": plan_date.isoformat()}
         lines = [f"💾 *תצוגה מקדימה — {branch} | {day_he} {plan_date.day}/{plan_date.month}*\n"]
+
+        # ✅ בדוק אם הקבוצות תקינות ליום זה
+        is_valid, warnings = _validate_plan_groups(branch, plan_text, plan_date)
+        if warnings:
+            lines.append("⚠️ *אזהרות:*")
+            for w in warnings:
+                lines.append(f"  {w}")
+            lines.append("")
+
         if preview:
             for g in preview:
                 time_str = f" ({g['time']})" if g.get("time") else ""
@@ -288,6 +374,7 @@ async def _plan_offer_save(update, user_id: str, plan_text: str, branch, plan_da
                 lines.append("")
         else:
             lines.append("⚠️ לא נמצאו קבוצות לשמירה")
+
         await update.message.reply_text(
             "\n".join(lines).strip(),
             parse_mode="Markdown",
@@ -1494,6 +1581,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _plan_offer_save(_FakeUpdate(query.message), user_id, plan_text, branch, plan_date)
         return
 
+    # ── Force save after warning ──
+    if action.startswith("plan_force_save|"):
+        await query.answer()
+        parts = action.split("|")
+        branch   = parts[1] if len(parts) > 1 else ""
+        date_iso = parts[2] if len(parts) > 2 else ""
+        plan_data = pending_plans.get(user_id, {})
+        plan_text = plan_data.get("reply", "") if isinstance(plan_data, dict) else str(plan_data)
+
+        if not plan_text or not branch or not date_iso:
+            await query.message.reply_text("❌ שגיאה: מידע חסר. נסה מחדש.")
+            return
+
+        from datetime import date as _date_cls
+        plan_date = _date_cls.fromisoformat(date_iso)
+
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"⏳ שומר תוכנית (עם אזהרות) — {branch} | {plan_date.day}/{plan_date.month}...")
+        try:
+            result = tp.save_full_day(branch, plan_date, plan_text)
+            record_action(user_id, "plan_save_forced", f"שמירת תוכנית {branch} {plan_date} (עם warning)",
+                          {"branch": branch, "plan_date": date_iso})
+            await query.message.reply_text(result, parse_mode="Markdown")
+        except Exception as e:
+            await query.message.reply_text(f"❌ שגיאה בשמירה: {e}")
+        return
+
     # ── Quick save — branch and date embedded in callback ──
     if action.startswith("plan_save_quick|"):
         await query.answer()
@@ -1512,6 +1626,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         from datetime import date as _date_cls
         plan_date = _date_cls.fromisoformat(date_iso)
+
+        # ✅ בדוק אם הקבוצות תקינות
+        is_valid, warnings = _validate_plan_groups(branch, plan_text, plan_date)
+        if warnings:
+            day_he = ws.day_name(plan_date)
+            warning_msg = "⚠️ *אזהרות:*\n" + "\n".join(warnings) + "\n\n"
+            warning_msg += f"האם להמשיך בשמירה?"
+            await query.message.reply_text(
+                warning_msg,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ כן, שמור בכל זאת", callback_data=f"plan_force_save|{branch}|{date_iso}"),
+                     InlineKeyboardButton("❌ ביטול", callback_data="cancel_flow")],
+                ])
+            )
+            return
+
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(f"⏳ שומר תוכנית לגיליון — {branch} | {plan_date.day}/{plan_date.month}...")
         try:
