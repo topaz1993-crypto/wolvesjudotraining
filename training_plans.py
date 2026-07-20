@@ -1134,14 +1134,17 @@ def _split_plan_into_sections(text: str, sched_groups: list) -> list:
 
     # ── Format 1: group name colon "ב-ד:" or "ב-ד: content" ──
     group_names_pattern = '|'.join(re.escape(sg["name"]) for sg in sched_groups)
+
+    # Try with colon first
     colon_splits = list(re.finditer(
-        rf'(?m)^[ \t]*({group_names_pattern})\s*[:()\d\-\s]*:\s*(.*)?$',
+        rf'(?m)^[ \t]*({group_names_pattern})\s*:\s*(.*)?$',
         text
     ))
-    # Also try simpler: line is just the group name + colon
+
+    # If no colon matches, try WITHOUT colon (just group name on its own line)
     if not colon_splits:
         colon_splits = list(re.finditer(
-            rf'(?m)^[ \t]*({group_names_pattern})\s*:\s*(.*)?$',
+            rf'(?m)^[ \t]*({group_names_pattern})[ \t]*$',
             text
         ))
 
